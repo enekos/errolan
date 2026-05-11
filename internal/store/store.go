@@ -290,13 +290,11 @@ func (s *Store) attachAvatars(byID map[int64]*models.Comment) {
 	if len(userIDs) == 0 {
 		return
 	}
-	placeholders := make([]string, 0, len(userIDs))
 	args := make([]any, 0, len(userIDs))
 	for id := range userIDs {
-		placeholders = append(placeholders, "?")
 		args = append(args, id)
 	}
-	q := "SELECT id, email FROM users WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	q := "SELECT id, email FROM users WHERE id IN (" + inPlaceholders(len(userIDs)) + ")"
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return
@@ -317,6 +315,14 @@ func (s *Store) attachAvatars(byID map[int64]*models.Comment) {
 			}
 		}
 	}
+}
+
+// inPlaceholders builds a "?,?,?,..." string with n placeholders efficiently.
+func inPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
 }
 
 func gravatarURL(email string) string {
@@ -465,13 +471,11 @@ func (s *Store) ListThreadComments(threadID int64, opts ListCommentsOpts) (roots
 	}
 
 	// Only fetch replies whose parent_id is one of the returned top-level comments.
-	placeholders := make([]string, 0, len(top))
 	replyArgs := make([]any, 0, len(top))
 	for id := range byID {
-		placeholders = append(placeholders, "?")
 		replyArgs = append(replyArgs, id)
 	}
-	q2 := fmt.Sprintf(`SELECT `+commentCols+` FROM comments WHERE parent_id IN (%s) ORDER BY created_at ASC`, strings.Join(placeholders, ","))
+	q2 := fmt.Sprintf(`SELECT `+commentCols+` FROM comments WHERE parent_id IN (%s) ORDER BY created_at ASC`, inPlaceholders(len(replyArgs)))
 	rrows, err := s.DB.Query(q2, replyArgs...)
 	if err != nil {
 		return nil, false, err
@@ -492,14 +496,12 @@ func (s *Store) ListThreadComments(threadID int64, opts ListCommentsOpts) (roots
 
 	// Apply viewer votes in one shot.
 	if opts.ViewerID != nil {
-		votePlaceholders := make([]string, 0, len(byID))
 		voteArgs := make([]any, 0, len(byID)+1)
 		voteArgs = append(voteArgs, *opts.ViewerID)
 		for id := range byID {
-			votePlaceholders = append(votePlaceholders, "?")
 			voteArgs = append(voteArgs, id)
 		}
-		vq := fmt.Sprintf(`SELECT comment_id, value FROM votes WHERE user_id = ? AND comment_id IN (%s)`, strings.Join(votePlaceholders, ","))
+		vq := fmt.Sprintf(`SELECT comment_id, value FROM votes WHERE user_id = ? AND comment_id IN (%s)`, inPlaceholders(len(byID)))
 		vrows, err := s.DB.Query(vq, voteArgs...)
 		if err == nil {
 			defer vrows.Close()
@@ -718,13 +720,11 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	if len(byID) == 0 {
 		return
 	}
-	placeholders := make([]string, 0, len(byID))
 	args := make([]any, 0, len(byID))
 	for id := range byID {
-		placeholders = append(placeholders, "?")
 		args = append(args, id)
 	}
-	q := "SELECT comment_id, code, count FROM reaction_counts WHERE comment_id IN (" + strings.Join(placeholders, ",") + ")"
+	q := "SELECT comment_id, code, count FROM reaction_counts WHERE comment_id IN (" + inPlaceholders(len(byID)) + ")"
 	rows, err := s.DB.Query(q, args...)
 	if err == nil {
 		defer rows.Close()
@@ -746,7 +746,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		return
 	}
 	margs := append([]any{*viewerID}, args...)
-	mq := "SELECT comment_id, code FROM reactions WHERE user_id = ? AND comment_id IN (" + strings.Join(placeholders, ",") + ")"
+	mq := "SELECT comment_id, code FROM reactions WHERE user_id = ? AND comment_id IN (" + inPlaceholders(len(byID)) + ")"
 	mrows, err := s.DB.Query(mq, margs...)
 	if err != nil {
 		return
