@@ -1,0 +1,46 @@
+# Air — live reload for Go development.
+#
+# Install once:   go install github.com/air-verse/air@latest
+# Then run:       air            (uses this file when present in cwd)
+#
+# Pick up env vars from a .env file or your shell. Air doesn't load .env on
+# its own, so the typical dev workflow is:
+#
+#   export $(grep -v '^#' .env | xargs) && air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # Build the Errolan binary into ./tmp/ so air can swap it without touching
+  # the workspace.
+  cmd     = "go build -o ./tmp/errolan ./cmd/errolan"
+  bin     = "./tmp/errolan"
+
+  # Watch only what affects the binary. SDK files are static — refresh the
+  # browser instead. The design/ folder is React design exploration, not
+  # source for the server.
+  include_ext       = ["go", "sql"]
+  exclude_dir       = ["tmp", "design", "sdk", ".git"]
+  exclude_regex     = ["_test\\.go$"]
+  exclude_unchanged = true
+  follow_symlink    = false
+
+  # Coalesce rapid edits (e.g. from goimports on save) into one rebuild.
+  delay = 800        # ms
+
+  # Don't kill the previous process until the new build succeeds; on failure
+  # we keep serving the last good binary and surface the error.
+  send_interrupt        = true
+  kill_delay            = "1s"
+  stop_on_error         = true
+  log                   = "build-errors.log"
+
+[log]
+  time = false
+
+[color]
+  build   = "yellow"
+  main    = "magenta"
+  runner  = "green"
+  watcher = "cyan"

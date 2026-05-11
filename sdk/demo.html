@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Errolan — demo: marginalia on a real article</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="errolan.css">
+  <style>
+    :root {
+      --paper: #FAF7EF;
+      --ink:   #16140F;
+      --mute:  #6E665A;
+      --rule:  #D9D2BF;
+      --accent: #B7351D;
+      --serif:  "Newsreader", Georgia, serif;
+      --display:"Instrument Serif", Georgia, serif;
+      --mono:   "JetBrains Mono", ui-monospace, monospace;
+    }
+    html, body { background: var(--paper); color: var(--ink); margin: 0; font-family: var(--serif); }
+    body { padding: 60px 80px; }
+    .layout { max-width: 720px; margin: 0 auto; }
+
+    .config {
+      margin-bottom: 40px;
+      padding: 14px 18px;
+      background: #F3EFE3;
+      border: 1px solid var(--rule);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--mute);
+    }
+    .config label { display: block; margin: 4px 0 2px; }
+    .config input { width: 100%; padding: 6px 8px; border: 1px solid var(--rule); background: var(--paper); font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+    .config button { padding: 6px 12px; background: var(--ink); color: var(--paper); border: none; cursor: pointer; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }
+
+    .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--accent); text-transform: uppercase; margin-bottom: 14px; }
+    h1.title { font-family: var(--display); font-weight: 400; font-size: 56px; line-height: 1.04; margin: 0 0 18px; }
+    .dek { font-family: var(--serif); font-style: italic; font-size: 22px; line-height: 1.4; color: var(--mute); margin: 0 0 28px; }
+    article.post { font-family: var(--serif); font-size: 19px; line-height: 1.7; }
+    article.post p { margin: 0 0 18px; }
+    article.post h2 { font-family: var(--display); font-weight: 400; font-size: 30px; margin: 36px 0 14px; }
+    article.post pre {
+      font-family: var(--mono); font-size: 13px; line-height: 1.55;
+      background: #F3EFE3; border-left: 2px solid var(--ink);
+      padding: 14px 16px; margin: 22px 0; overflow: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="layout">
+
+    <div class="config">
+      <strong>Errolan demo · marginalia mode</strong>
+      <label>API base</label>
+      <input id="cfg-api" placeholder="http://localhost:8080">
+      <label>Site key (erl_…)</label>
+      <input id="cfg-site" placeholder="erl_...">
+      <label>Thread slug</label>
+      <input id="cfg-thread" value="we-removed-the-queue">
+      <button onclick="reload()">Mount</button>
+      <span style="margin-left:12px">Each paragraph below carries <code>data-errolan-anchor</code> — click a stamp in the right margin.</span>
+    </div>
+
+    <div class="kicker">Infrastructure · May 6, 2026 · 11 min</div>
+    <h1 class="title">We removed our message queue and nothing exploded</h1>
+    <p class="dek">A long story about read-your-writes consistency, a 600-line consumer that became 12, and the unglamorous engineering of "obvious in retrospect."</p>
+
+    <article class="post" id="post">
+      <p data-errolan-anchor="p1">Last quarter we removed the message queue from our checkout service. We replaced about six hundred lines of consumer plumbing with a twelve-line function. Nothing exploded. This is the longer version of what we found.</p>
+      <p data-errolan-anchor="p2">The history is mundane. Three years ago, when the team was four engineers, we punted on a tricky synchronous call by sticking a queue between two services. It worked. It was also the start of a long story about read-your-writes consistency that ended up costing us more than the original synchronous call would have.</p>
+      <p data-errolan-anchor="p3">None of this is an indictment of message queues. It is an indictment of our use of a message queue for a workload it was never the right tool for. The shape of the workload mattered more than the shape of the tool.</p>
+      <h2 data-errolan-anchor="p4">The original architecture</h2>
+      <p data-errolan-anchor="p5">Order writes went to the primary database, then a change-data-capture stream fanned them out to a queue, and a consumer materialized them into a read model. The read model was the thing the checkout UI actually read from.</p>
+      <pre data-errolan-anchor="p6">// the original consumer, roughly
+async function onOrderCreated(evt) {
+  const order = await db.orders.get(evt.id);
+  const lines = await db.lines.where({ orderId: evt.id }).all();
+  const totals = await pricing.totals(order, lines);
+  await readModel.upsert(toReadRow(order, lines, totals));
+}</pre>
+      <p data-errolan-anchor="p7">On a quiet day, end-to-end latency was around forty milliseconds. On a less quiet day — a deploy, a slow consumer, a backed-up partition — it was whatever the consumer's lag happened to be. The UI did not know which day it was.</p>
+      <p data-errolan-anchor="p8">We tried the usual things. Read-after-write polling. A short cache. A "did you mean to refresh?" toast which I am still embarrassed about. Each one papered over the same shape of bug and left a different one behind.</p>
+      <h2 data-errolan-anchor="p9">What we actually wanted</h2>
+      <p data-errolan-anchor="p10">What we actually wanted was a strongly-consistent read of a small, bounded view of the data, on the request path, on the same database. We were using a queue because someone had once said the word "decoupling" out loud and nobody had revisited it.</p>
+    </article>
+
+    <!-- Errolan mount: marginalia mode, anchored to the article above -->
+    <div id="errolan"
+         data-errolan-thread="we-removed-the-queue"
+         data-errolan-mode="marginalia"
+         data-errolan-article="#post"></div>
+  </div>
+
+  <script src="errolan.js"></script>
+  <script>
+    function reload() {
+      const api = document.getElementById("cfg-api").value || "http://localhost:8080";
+      const site = document.getElementById("cfg-site").value;
+      const thread = document.getElementById("cfg-thread").value || "we-removed-the-queue";
+      if (!site) { alert("Set the site key first"); return; }
+      localStorage.setItem("demo.api", api);
+      localStorage.setItem("demo.site", site);
+      localStorage.setItem("demo.thread", thread);
+
+      const slot = document.getElementById("errolan");
+      slot.__erlMounted = false;
+      slot.innerHTML = "";
+      slot.setAttribute("data-errolan-thread", thread);
+
+      // Remove any previous rail/panel from a prior mount.
+      document.querySelectorAll(".erl-rail, .erl-panel-overlay").forEach(n => n.remove());
+
+      Errolan.mount(slot, {
+        api, site, thread,
+        mode: "marginalia",
+        article: "#post",
+        title: document.title,
+        url: location.href,
+      });
+    }
+    document.getElementById("cfg-api").value = localStorage.getItem("demo.api") || "http://localhost:8080";
+    document.getElementById("cfg-site").value = localStorage.getItem("demo.site") || "";
+    document.getElementById("cfg-thread").value = localStorage.getItem("demo.thread") || "we-removed-the-queue";
+    if (document.getElementById("cfg-site").value) reload();
+  </script>
+</body>
+</html>

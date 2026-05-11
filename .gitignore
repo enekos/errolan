@@ -1,0 +1,12 @@
+/errolan
+/hitzegin
+/bin/
+/tmp/
+build-errors.log
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+node_modules/
+.DS_Store

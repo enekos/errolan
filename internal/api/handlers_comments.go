@@ -1,0 +1,207 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/enekosarasola/errolan/internal/models"
+	"github.com/enekosarasola/errolan/internal/store"
+)
+
+func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	c, err := s.Store.CommentByID(id, nil)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	if !user.IsAdmin && (c.UserID == nil || *c.UserID != user.ID) {
+		writeError(w, http.StatusForbidden, "not your comment")
+		return
+	}
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	body := strings.TrimSpace(req.Body)
+	if body == "" || len(body) > 8000 {
+		writeError(w, http.StatusBadRequest, "invalid body length")
+		return
+	}
+	if err := s.Store.UpdateCommentBody(id, body); err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
+	}
+	if user.IsAdmin && (c.UserID == nil || *c.UserID != user.ID) {
+		s.Store.AddAudit(&user.ID, user.Name, "comment.edit", "comment", id, "")
+	}
+	s.Hub.Publish(c.ThreadID, "edit")
+	updated, _ := s.Store.CommentByID(id, &user.ID)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	c, err := s.Store.CommentByID(id, nil)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	if !user.IsAdmin && (c.UserID == nil || *c.UserID != user.ID) {
+		writeError(w, http.StatusForbidden, "not your comment")
+		return
+	}
+	if err := s.Store.SetCommentStatus(id, models.CommentStatusDeleted); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	if user.IsAdmin && (c.UserID == nil || *c.UserID != user.ID) {
+		s.Store.AddAudit(&user.ID, user.Name, "comment.delete", "comment", id, "")
+		s.notifyWebhook(map[string]any{"event": "comment.delete", "comment_id": id, "actor": user.Email})
+	}
+	s.Hub.Publish(c.ThreadID, "delete")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleVote(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req struct {
+		Value int `json:"value"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Value < -1 || req.Value > 1 {
+		writeError(w, http.StatusBadRequest, "value must be -1, 0, or 1")
+		return
+	}
+	c, err := s.Store.CommentByID(id, nil)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	score, err := s.Store.Vote(user.ID, id, req.Value)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "vote failed")
+		return
+	}
+	s.Hub.Publish(c.ThreadID, "vote")
+	writeJSON(w, http.StatusOK, map[string]any{"score": score, "my_vote": req.Value})
+}
+
+func (s *Server) handleFlag(w http.ResponseWriter, r *http.Request) {
+	if !s.WriteLimiter.Allow("flag:" + clientIP(r)) {
+		writeError(w, http.StatusTooManyRequests, "slow down")
+		return
+	}
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	c, err := s.Store.CommentByID(id, nil)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = decode(r, &req)
+	reason := strings.TrimSpace(req.Reason)
+	if len(reason) > 500 {
+		reason = reason[:500]
+	}
+	var userID *int64
+	if u := userFrom(r); u != nil {
+		userID = &u.ID
+	}
+	if err := s.Store.Flag(id, userID, reason); err != nil {
+		if err == store.ErrConflict {
+			// Idempotent: already flagged by this user.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "flag failed")
+		return
+	}
+	s.notifyWebhook(map[string]any{"event": "comment.flag", "comment_id": id, "thread_id": c.ThreadID})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePinComment(w http.ResponseWriter, r *http.Request) {
+	admin, err := requireAdmin(r)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	c, err := s.Store.CommentByID(id, nil)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	var req struct {
+		Pinned bool `json:"pinned"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if err := s.Store.SetCommentPinned(id, req.Pinned); err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
+	}
+	s.Store.AddAudit(&admin.ID, admin.Name, "comment.pin", "comment", id, fmt.Sprintf(`{"pinned":%t}`, req.Pinned))
+	s.Hub.Publish(c.ThreadID, "pin")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListFlagged(w http.ResponseWriter, r *http.Request) {
+	if _, err := requireAdmin(r); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	flagged, err := s.Store.ListFlagged(100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, flagged)
+}
