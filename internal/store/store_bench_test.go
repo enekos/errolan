@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/enekosarasola/errolan/internal/db"
+	"github.com/enekos/errolan/internal/db"
 )
 
 func setupBenchDB(b *testing.B) (*sql.DB, int64, func()) {

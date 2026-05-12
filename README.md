@@ -15,6 +15,7 @@ The design language is editorial: Newsreader / Instrument Serif / JetBrains Mono
 - JWT auth + per-account login lockout; per-site option to allow anonymous posting
 - Per-site allowed origins (CORS); cached site lookups
 - Moderation: lock threads, ban users, flag queue, audit log
+- **Flexible moderation policy** per site — pre-moderation queue, keyword/regex blocklists, link rules, new-user holds, auto-hide on flag threshold
 - gzip compression, ETag-based 304s, denormalized counters, pagination
 - Real-time updates via Server-Sent Events (polling fallback)
 - Hardening: rate limiting (global + auth + write), body-size cap, security headers, honeypot anti-spam
@@ -196,8 +197,38 @@ A site's emoji pack is a per-site whitelist of reaction codes. Users can only re
 | -- | -- | -- |
 | `GET` | `/api/mod/flagged` | Admin only |
 | `GET` | `/api/mod/audit?limit=100` | Admin only — moderation audit log |
+| `GET` | `/api/mod/queue?site=<slug>&limit=100` | Admin only — comments currently held for review (optional per-site filter) |
+| `POST` | `/api/comments/{id}/approve` | Admin only — move a pending comment to visible |
+| `POST` | `/api/comments/{id}/reject` | Admin only; `{reason?}` — move a pending comment to hidden |
 | `GET` | `/api/admin/users?limit=50&offset=0` | Admin only |
 | `POST` | `/api/admin/users/{id}/ban` | Admin only; `{banned: bool}` — cannot ban yourself or another admin |
+
+### Flexible moderation policy
+
+Each site gets its own policy row. Defaults match the pre-feature open behaviour — until you `PATCH` settings, every site behaves exactly as before.
+
+| Method | Path | Notes |
+| -- | -- | -- |
+| `GET` | `/api/sites/{slug}/moderation` | Admin only — read the active policy |
+| `PATCH` | `/api/sites/{slug}/moderation` | Admin only — upsert the policy |
+| `GET` | `/api/sites/{slug}/moderation/blocklist` | Admin only |
+| `POST` | `/api/sites/{slug}/moderation/blocklist` | Admin only; `{kind: "keyword"\|"regex", pattern, action: "hold"\|"reject"}` |
+| `DELETE` | `/api/sites/{slug}/moderation/blocklist/{id}` | Admin only |
+
+Policy fields (all optional, sensible defaults):
+
+| Field | Type | Effect |
+| -- | -- | -- |
+| `mode` | `open` \| `pre_moderation` | `pre_moderation` holds every non-admin comment in the queue |
+| `hold_new_users` | int | Hold a registered user's first N comments for review |
+| `min_account_age_seconds` | int | Hold comments from accounts younger than this |
+| `min_body_length` | int | Reject anything shorter than this (returns `422`) |
+| `max_links` | int (`-1` = unlimited) | Hold comments with more URLs than this |
+| `link_policy` | `allow` \| `hold` \| `reject` | Applied when any URL is present |
+| `anonymous_link_policy` | `allow` \| `hold` \| `reject` | Same, but only for unauthenticated posters |
+| `auto_hide_flag_count` | int (`0` = off) | Auto-hide a visible comment once it has at least this many distinct flags |
+
+When the engine holds a comment, `POST /api/threads/{slug}/comments` returns `202 Accepted` with `{"status":"pending","reason":"…","comment":{…}}` and the comment does **not** appear in public listings. When it rejects, the response is `422 Unprocessable Entity` with `{"error":"comment rejected by moderation","reason":"…"}` and nothing is persisted. Admins always see pending comments in thread listings and can approve / reject from `/api/mod/queue`.
 
 ### Security headers & rate limits
 

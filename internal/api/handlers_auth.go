@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/enekosarasola/errolan/internal/auth"
-	"github.com/enekosarasola/errolan/internal/store"
+	"github.com/enekos/errolan/internal/auth"
+	"github.com/enekos/errolan/internal/store"
 )
 
 type registerReq struct {

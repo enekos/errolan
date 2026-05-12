@@ -1,4 +1,4 @@
-module github.com/enekosarasola/errolan
+module github.com/enekos/errolan
 
 go 1.25
 

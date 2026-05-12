@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/enekosarasola/errolan/internal/models"
+	"github.com/enekos/errolan/internal/models"
 )
 
 var (
@@ -336,16 +336,22 @@ func gravatarURL(email string) string {
 func scanComment(row interface{ Scan(...any) error }) (*models.Comment, error) {
 	c := &models.Comment{}
 	var pinned int
-	if err := row.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body, &c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body, &c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor, &c.ModerationReason, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
 	c.Pinned = pinned != 0
 	return c, nil
 }
 
-const commentCols = `id, thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at`
+const commentCols = `id, thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, moderation_reason, created_at, updated_at`
 
-func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, authorName, body, email, anchor string) (*models.Comment, error) {
+// CreateComment inserts a comment with the supplied moderation status. Pending
+// comments do NOT bump the denormalised thread counter — only public, visible
+// comments count toward what readers will eventually see.
+func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, authorName, body, email, anchor, status, modReason string) (*models.Comment, error) {
+	if status == "" {
+		status = models.CommentStatusVisible
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return nil, err
@@ -354,17 +360,19 @@ func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, au
 
 	now := time.Now().Unix()
 	res, err := tx.Exec(
-		`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 'visible', 0, 0, 0, ?, ?, ?)`,
-		threadID, parentID, userID, authorName, body, anchor, now, now,
+		`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, moderation_reason, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)`,
+		threadID, parentID, userID, authorName, body, status, anchor, modReason, now, now,
 	)
 	if err != nil {
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
 
-	if _, err := tx.Exec(`UPDATE threads SET comment_count = comment_count + 1, last_comment_at = ? WHERE id = ?`, now, threadID); err != nil {
-		return nil, err
+	if status == models.CommentStatusVisible {
+		if _, err := tx.Exec(`UPDATE threads SET comment_count = comment_count + 1, last_comment_at = ? WHERE id = ?`, now, threadID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -377,6 +385,22 @@ func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, au
 		c.AvatarURL = gravatarURL(email)
 	}
 	return c, nil
+}
+
+// CountUserComments is used by the moderation engine to decide whether a
+// registered user is still "new" for the hold-new-users policy.
+func (s *Store) CountUserComments(userID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM comments WHERE user_id = ?`, userID).Scan(&n)
+	return n, err
+}
+
+// CountFlags returns the number of distinct flags on a comment. Used by the
+// auto-hide-on-flag threshold.
+func (s *Store) CountFlags(commentID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM flags WHERE comment_id = ?`, commentID).Scan(&n)
+	return n, err
 }
 
 func (s *Store) CommentByID(id int64, viewerID *int64) (*models.Comment, error) {
@@ -415,10 +439,11 @@ func (s SortOrder) clause() string {
 }
 
 type ListCommentsOpts struct {
-	Sort     SortOrder
-	Limit    int // top-level pagination; 0 = all
-	BeforeID int64
-	ViewerID *int64
+	Sort           SortOrder
+	Limit          int // top-level pagination; 0 = all
+	BeforeID       int64
+	ViewerID       *int64
+	IncludePending bool // admins see comments still waiting in the queue
 }
 
 func (s *Store) ListThreadComments(threadID int64, opts ListCommentsOpts) (roots []*models.Comment, hasMore bool, err error) {
@@ -430,6 +455,9 @@ func (s *Store) ListThreadComments(threadID int64, opts ListCommentsOpts) (roots
 	var args []any
 	args = append(args, threadID)
 	where := "thread_id = ? AND parent_id IS NULL"
+	if !opts.IncludePending {
+		where += " AND status != 'pending'"
+	}
 	if opts.BeforeID > 0 {
 		where += " AND id < ?"
 		args = append(args, opts.BeforeID)
@@ -475,7 +503,11 @@ func (s *Store) ListThreadComments(threadID int64, opts ListCommentsOpts) (roots
 	for id := range byID {
 		replyArgs = append(replyArgs, id)
 	}
-	q2 := fmt.Sprintf(`SELECT `+commentCols+` FROM comments WHERE parent_id IN (%s) ORDER BY created_at ASC`, inPlaceholders(len(replyArgs)))
+	statusFilter := ""
+	if !opts.IncludePending {
+		statusFilter = " AND status != 'pending'"
+	}
+	q2 := fmt.Sprintf(`SELECT `+commentCols+` FROM comments WHERE parent_id IN (%s)%s ORDER BY created_at ASC`, inPlaceholders(len(replyArgs)), statusFilter)
 	rrows, err := s.DB.Query(q2, replyArgs...)
 	if err != nil {
 		return nil, false, err
@@ -571,8 +603,10 @@ func (s *Store) SetCommentStatus(id int64, status string) error {
 	if _, err := tx.Exec(`UPDATE comments SET status = ?, updated_at = ? WHERE id = ?`, status, time.Now().Unix(), id); err != nil {
 		return err
 	}
-	wasVisible := prev != models.CommentStatusDeleted
-	nowVisible := status != models.CommentStatusDeleted
+	// comment_count tracks only the publicly-visible set. Pending, hidden and
+	// deleted comments are all "not visible" for counter purposes.
+	wasVisible := prev == models.CommentStatusVisible
+	nowVisible := status == models.CommentStatusVisible
 	if wasVisible != nowVisible {
 		delta := -1
 		if nowVisible {
@@ -583,6 +617,26 @@ func (s *Store) SetCommentStatus(id int64, status string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ApproveComment moves a pending comment to visible. The denormalised
+// counter is updated via the same SetCommentStatus path. Returns the updated
+// comment so the caller can surface it.
+func (s *Store) ApproveComment(id int64) error {
+	return s.SetCommentStatus(id, models.CommentStatusVisible)
+}
+
+// RejectComment moves a pending comment to hidden — body is preserved for
+// audit but the comment never appears in public listings.
+func (s *Store) RejectComment(id int64) error {
+	return s.SetCommentStatus(id, models.CommentStatusHidden)
+}
+
+// SetModerationReason updates the human-readable reason on a comment. Used
+// when an admin overrides the engine's verdict.
+func (s *Store) SetModerationReason(id int64, reason string) error {
+	_, err := s.DB.Exec(`UPDATE comments SET moderation_reason = ? WHERE id = ?`, reason, id)
+	return err
 }
 
 func (s *Store) SetCommentPinned(id int64, pinned bool) error {
@@ -656,7 +710,7 @@ type FlaggedComment struct {
 func (s *Store) ListFlagged(limit int) ([]*FlaggedComment, error) {
 	rows, err := s.DB.Query(
 		`SELECT c.id, c.thread_id, c.parent_id, c.user_id, c.author_name, c.body, c.status,
-		        c.score, c.pinned, c.edit_count, c.anchor, c.created_at, c.updated_at, COUNT(f.id) AS flag_count
+		        c.score, c.pinned, c.edit_count, c.anchor, c.moderation_reason, c.created_at, c.updated_at, COUNT(f.id) AS flag_count
 		   FROM comments c
 		   JOIN flags f ON f.comment_id = c.id
 		  GROUP BY c.id
@@ -672,7 +726,7 @@ func (s *Store) ListFlagged(limit int) ([]*FlaggedComment, error) {
 		c := &models.Comment{}
 		var pinned int
 		var fc int
-		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body, &c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor, &c.CreatedAt, &c.UpdatedAt, &fc); err != nil {
+		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body, &c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor, &c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &fc); err != nil {
 			return nil, err
 		}
 		c.Pinned = pinned != 0
@@ -876,6 +930,142 @@ func (s *Store) DeleteEmoji(siteID int64, code string) error {
 	}
 	return nil
 }
+
+// ---------- Moderation settings ----------
+
+// ModerationSettings returns the policy for a site, or default values when no
+// row exists yet (sites pre-feature-rollout behave exactly like before).
+func (s *Store) ModerationSettings(siteID int64) (*models.ModerationSettings, error) {
+	m := models.DefaultModerationSettings(siteID)
+	row := s.DB.QueryRow(
+		`SELECT site_id, mode, hold_new_users, min_account_age_seconds, min_body_length,
+		        max_links, link_policy, anonymous_link_policy, auto_hide_flag_count, updated_at
+		   FROM site_moderation WHERE site_id = ?`, siteID,
+	)
+	err := row.Scan(&m.SiteID, &m.Mode, &m.HoldNewUsers, &m.MinAccountAgeSeconds, &m.MinBodyLength,
+		&m.MaxLinks, &m.LinkPolicy, &m.AnonymousLinkPolicy, &m.AutoHideFlagCount, &m.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return &m, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (s *Store) UpdateModerationSettings(m *models.ModerationSettings) error {
+	m.UpdatedAt = time.Now().Unix()
+	_, err := s.DB.Exec(
+		`INSERT INTO site_moderation (site_id, mode, hold_new_users, min_account_age_seconds, min_body_length,
+		     max_links, link_policy, anonymous_link_policy, auto_hide_flag_count, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(site_id) DO UPDATE SET
+		   mode = excluded.mode,
+		   hold_new_users = excluded.hold_new_users,
+		   min_account_age_seconds = excluded.min_account_age_seconds,
+		   min_body_length = excluded.min_body_length,
+		   max_links = excluded.max_links,
+		   link_policy = excluded.link_policy,
+		   anonymous_link_policy = excluded.anonymous_link_policy,
+		   auto_hide_flag_count = excluded.auto_hide_flag_count,
+		   updated_at = excluded.updated_at`,
+		m.SiteID, m.Mode, m.HoldNewUsers, m.MinAccountAgeSeconds, m.MinBodyLength,
+		m.MaxLinks, m.LinkPolicy, m.AnonymousLinkPolicy, m.AutoHideFlagCount, m.UpdatedAt,
+	)
+	return err
+}
+
+// ---------- Moderation blocklist ----------
+
+func (s *Store) ListBlocklist(siteID int64) ([]*models.BlocklistEntry, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, site_id, kind, pattern, action, created_at FROM moderation_blocklist WHERE site_id = ? ORDER BY id`,
+		siteID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.BlocklistEntry
+	for rows.Next() {
+		e := &models.BlocklistEntry{}
+		if err := rows.Scan(&e.ID, &e.SiteID, &e.Kind, &e.Pattern, &e.Action, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddBlocklistEntry(siteID int64, kind, pattern, action string) (*models.BlocklistEntry, error) {
+	now := time.Now().Unix()
+	res, err := s.DB.Exec(
+		`INSERT INTO moderation_blocklist (site_id, kind, pattern, action, created_at) VALUES (?, ?, ?, ?, ?)`,
+		siteID, kind, pattern, action, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return nil, ErrConflict
+		}
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	return &models.BlocklistEntry{
+		ID:        id,
+		SiteID:    siteID,
+		Kind:      kind,
+		Pattern:   pattern,
+		Action:    action,
+		CreatedAt: now,
+	}, nil
+}
+
+func (s *Store) DeleteBlocklistEntry(siteID, id int64) error {
+	res, err := s.DB.Exec(`DELETE FROM moderation_blocklist WHERE site_id = ? AND id = ?`, siteID, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ---------- Moderation queue ----------
+
+// ListPendingComments returns comments awaiting review across every site,
+// most-recent-first. Optional siteID filter when an admin wants a single feed.
+func (s *Store) ListPendingComments(siteID int64, limit int) ([]*models.Comment, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT ` + commentCols + ` FROM comments c
+	      WHERE c.status = 'pending'`
+	args := []any{}
+	if siteID > 0 {
+		q += ` AND c.thread_id IN (SELECT id FROM threads WHERE site_id = ?)`
+		args = append(args, siteID)
+	}
+	q += ` ORDER BY c.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.DB.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.Comment
+	for rows.Next() {
+		c, err := scanComment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ---------- Emoji helpers (continued) ----------
 
 // CodesForSite returns the set of valid emoji codes for a site. Used to gate
 // reactions so users can't react with arbitrary strings.

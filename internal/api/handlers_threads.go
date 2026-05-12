@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/enekosarasola/errolan/internal/models"
-	"github.com/enekosarasola/errolan/internal/store"
+	"github.com/enekos/errolan/internal/models"
+	"github.com/enekos/errolan/internal/moderation"
+	"github.com/enekos/errolan/internal/store"
 )
 
 type threadResp struct {
@@ -89,10 +91,11 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 		viewerID = &id
 	}
 	comments, hasMore, err := s.Store.ListThreadComments(thread.ID, store.ListCommentsOpts{
-		Sort:     parseSort(sortParam),
-		Limit:    limit,
-		BeforeID: beforeID,
-		ViewerID: viewerID,
+		Sort:           parseSort(sortParam),
+		Limit:          limit,
+		BeforeID:       beforeID,
+		ViewerID:       viewerID,
+		IncludePending: viewer != nil && viewer.IsAdmin,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "comment load failed")
@@ -279,11 +282,62 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		anchor = parent.Anchor
 	}
 
-	c, err := s.Store.CreateComment(thread.ID, req.ParentID, userID, authorName, body, email, anchor)
+	// Run the moderation engine. Admins skip the queue: an admin posting is
+	// implicitly trusted and a pre-moderation site shouldn't force its own
+	// owner to approve themselves.
+	decision := moderation.Decision{Action: moderation.ActionAllow}
+	if user == nil || !user.IsAdmin {
+		settings, _ := s.Store.ModerationSettings(site.ID)
+		blocklist, _ := s.Store.ListBlocklist(site.ID)
+		rules := moderation.CompileRules(blocklist)
+		in := moderation.Input{Body: body, Anonymous: user == nil}
+		if user != nil {
+			in.AuthorAccountAgeSec = time.Now().Unix() - user.CreatedAt
+			if n, err := s.Store.CountUserComments(user.ID); err == nil {
+				in.AuthorCommentCount = n
+			}
+		}
+		decision = moderation.Evaluate(*settings, rules, in)
+	}
+
+	if decision.Action == moderation.ActionReject {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error":  "comment rejected by moderation",
+			"reason": decision.Reason,
+		})
+		return
+	}
+
+	status := models.CommentStatusVisible
+	if decision.Action == moderation.ActionHold {
+		status = models.CommentStatusPending
+	}
+
+	c, err := s.Store.CreateComment(thread.ID, req.ParentID, userID, authorName, body, email, anchor, status, decision.Reason)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
 	}
+
+	if status == models.CommentStatusPending {
+		// Don't fanout to the thread's SSE subscribers — the comment isn't
+		// public yet. Surface the hold to ops via webhook + audit instead.
+		s.Store.AddAudit(userID, authorName, "comment.hold", "comment", c.ID, decision.Reason)
+		s.notifyWebhook(map[string]any{
+			"event":     "comment.pending",
+			"site":      site.Slug,
+			"thread":    thread.Slug,
+			"comment":   c,
+			"reason":    decision.Reason,
+		})
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":  "pending",
+			"reason":  decision.Reason,
+			"comment": c,
+		})
+		return
+	}
+
 	s.Hub.Publish(thread.ID, "comment")
 	s.notifyWebhook(map[string]any{"event": "comment.created", "site": site.Slug, "thread": thread.Slug, "comment": c})
 	writeJSON(w, http.StatusCreated, c)

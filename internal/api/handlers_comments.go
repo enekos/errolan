@@ -3,10 +3,11 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
-	"github.com/enekosarasola/errolan/internal/models"
-	"github.com/enekosarasola/errolan/internal/store"
+	"github.com/enekos/errolan/internal/models"
+	"github.com/enekos/errolan/internal/store"
 )
 
 func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +159,23 @@ func (s *Server) handleFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyWebhook(map[string]any{"event": "comment.flag", "comment_id": id, "thread_id": c.ThreadID})
+
+	// Auto-hide-on-flag-threshold: when the site policy sets a non-zero
+	// auto_hide_flag_count, hide a still-visible comment once enough distinct
+	// flags have landed. Best-effort — failures don't block the flag response.
+	if c.Status == models.CommentStatusVisible {
+		if thread, err := s.Store.ThreadByID(c.ThreadID); err == nil {
+			if settings, err := s.Store.ModerationSettings(thread.SiteID); err == nil && settings.AutoHideFlagCount > 0 {
+				if count, err := s.Store.CountFlags(id); err == nil && count >= settings.AutoHideFlagCount {
+					if err := s.Store.SetCommentStatus(id, models.CommentStatusHidden); err == nil {
+						s.Store.AddAudit(nil, "system", "comment.auto_hide", "comment", id, "flag threshold ("+strconv.Itoa(count)+")")
+						s.Hub.Publish(c.ThreadID, "hide")
+					}
+				}
+			}
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

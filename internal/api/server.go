@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/enekosarasola/errolan/internal/auth"
-	"github.com/enekosarasola/errolan/internal/cache"
-	"github.com/enekosarasola/errolan/internal/hub"
-	"github.com/enekosarasola/errolan/internal/lockout"
-	"github.com/enekosarasola/errolan/internal/ratelimit"
-	"github.com/enekosarasola/errolan/internal/store"
+	"github.com/enekos/errolan/internal/auth"
+	"github.com/enekos/errolan/internal/cache"
+	"github.com/enekos/errolan/internal/hub"
+	"github.com/enekos/errolan/internal/lockout"
+	"github.com/enekos/errolan/internal/ratelimit"
+	"github.com/enekos/errolan/internal/store"
 )
 
 type Server struct {
@@ -91,6 +91,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/users/{id}/ban", s.handleBanUser)
 	mux.HandleFunc("GET /api/mod/flagged", s.handleListFlagged)
 	mux.HandleFunc("GET /api/mod/audit", s.handleAuditLog)
+
+	// Moderation: per-site policy, blocklist, hold queue
+	mux.HandleFunc("GET /api/sites/{slug}/moderation", s.handleGetModeration)
+	mux.HandleFunc("PATCH /api/sites/{slug}/moderation", s.handleUpdateModeration)
+	mux.HandleFunc("GET /api/sites/{slug}/moderation/blocklist", s.handleListBlocklist)
+	mux.HandleFunc("POST /api/sites/{slug}/moderation/blocklist", s.handleAddBlocklist)
+	mux.HandleFunc("DELETE /api/sites/{slug}/moderation/blocklist/{id}", s.handleDeleteBlocklist)
+	mux.HandleFunc("GET /api/mod/queue", s.handleModQueue)
+	mux.HandleFunc("POST /api/comments/{id}/approve", s.handleApproveComment)
+	mux.HandleFunc("POST /api/comments/{id}/reject", s.handleRejectComment)
 
 	// SDK static
 	if s.SDKDir != "" {

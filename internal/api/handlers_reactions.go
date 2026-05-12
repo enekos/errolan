@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/enekosarasola/errolan/internal/store"
+	"github.com/enekos/errolan/internal/store"
 )
 
 // validEmojiCode keeps codes to lowercase ASCII slugs so they're safe as path

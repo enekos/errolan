@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/enekosarasola/errolan/internal/models"
+	"github.com/enekos/errolan/internal/models"
 )
 
 type ctxKey int
