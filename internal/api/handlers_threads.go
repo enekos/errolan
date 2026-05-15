@@ -7,21 +7,37 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/enekos/errolan/internal/models"
 	"github.com/enekos/errolan/internal/moderation"
 	"github.com/enekos/errolan/internal/store"
 )
 
+// threadSiteView is the trimmed-down site payload returned alongside a thread.
+// The API key never leaks here — that's an admin-only field.
+type threadSiteView struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	RequireAuth bool   `json:"require_auth"`
+}
+
+// threadViewerView is the trimmed-down viewer payload for the current request.
+// Password hash and ban state are deliberately omitted.
+type threadViewerView struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Email   string `json:"email"`
+	IsAdmin bool   `json:"is_admin"`
+}
+
 type threadResp struct {
 	Thread   *models.Thread    `json:"thread"`
-	Site     map[string]any    `json:"site"`
+	Site     threadSiteView    `json:"site"`
 	Comments []*models.Comment `json:"comments"`
 	HasMore  bool              `json:"has_more"`
 	NextID   *int64            `json:"next_id,omitempty"`
 	Sort     string            `json:"sort"`
-	Viewer   map[string]any    `json:"viewer,omitempty"`
+	Viewer   *threadViewerView `json:"viewer,omitempty"`
 	Emojis   []*models.Emoji   `json:"emojis"`
 }
 
@@ -45,7 +61,7 @@ func threadETag(t *models.Thread) string {
 func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	slug := r.PathValue("slug")
@@ -115,19 +131,19 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 		HasMore:  hasMore,
 		NextID:   nextID,
 		Sort:     string(parseSort(sortParam)),
-		Site: map[string]any{
-			"slug":         site.Slug,
-			"name":         site.Name,
-			"require_auth": site.RequireAuth,
+		Site: threadSiteView{
+			Slug:        site.Slug,
+			Name:        site.Name,
+			RequireAuth: site.RequireAuth,
 		},
 		Emojis: emojis,
 	}
 	if viewer != nil {
-		resp.Viewer = map[string]any{
-			"id":       viewer.ID,
-			"name":     viewer.Name,
-			"email":    viewer.Email,
-			"is_admin": viewer.IsAdmin,
+		resp.Viewer = &threadViewerView{
+			ID:      viewer.ID,
+			Name:    viewer.Name,
+			Email:   viewer.Email,
+			IsAdmin: viewer.IsAdmin,
 		}
 	}
 	w.Header().Set("ETag", tag)
@@ -138,12 +154,12 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLockThread(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	slug := r.PathValue("slug")
@@ -201,7 +217,7 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	slug := r.PathValue("slug")
@@ -285,20 +301,7 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	// Run the moderation engine. Admins skip the queue: an admin posting is
 	// implicitly trusted and a pre-moderation site shouldn't force its own
 	// owner to approve themselves.
-	decision := moderation.Decision{Action: moderation.ActionAllow}
-	if user == nil || !user.IsAdmin {
-		settings, _ := s.Store.ModerationSettings(site.ID)
-		blocklist, _ := s.Store.ListBlocklist(site.ID)
-		rules := moderation.CompileRules(blocklist)
-		in := moderation.Input{Body: body, Anonymous: user == nil}
-		if user != nil {
-			in.AuthorAccountAgeSec = time.Now().Unix() - user.CreatedAt
-			if n, err := s.Store.CountUserComments(user.ID); err == nil {
-				in.AuthorCommentCount = n
-			}
-		}
-		decision = moderation.Evaluate(*settings, rules, in)
-	}
+	decision := s.evaluateComment(site.ID, user, user == nil, body)
 
 	if decision.Action == moderation.ActionReject {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{

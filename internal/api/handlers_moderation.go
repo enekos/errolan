@@ -29,29 +29,6 @@ func (s *Server) resolveAdminSite(r *http.Request) (*models.Site, *models.User, 
 	return site, admin, nil
 }
 
-var (
-	errSiteSlugRequired = httpError(http.StatusBadRequest, "site slug required")
-	errSiteNotFound     = httpError(http.StatusNotFound, "site not found")
-)
-
-type apiError struct {
-	status int
-	msg    string
-}
-
-func (e *apiError) Error() string { return e.msg }
-func httpError(s int, m string) error {
-	return &apiError{status: s, msg: m}
-}
-
-func writeAPIError(w http.ResponseWriter, err error) {
-	if ae, ok := err.(*apiError); ok {
-		writeError(w, ae.status, ae.msg)
-		return
-	}
-	writeError(w, http.StatusInternalServerError, err.Error())
-}
-
 // ----- Site moderation settings -----
 
 func (s *Server) handleGetModeration(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +155,7 @@ func (s *Server) handleDeleteBlocklist(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModQueue(w http.ResponseWriter, r *http.Request) {
 	if _, err := requireAdmin(r); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -202,70 +179,65 @@ func (s *Server) handleModQueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pending)
 }
 
-func (s *Server) handleApproveComment(w http.ResponseWriter, r *http.Request) {
+// resolvePendingComment is the shared preamble for approve/reject. Returns the
+// pending comment plus the acting admin; emits the right HTTP error otherwise.
+func (s *Server) resolvePendingComment(w http.ResponseWriter, r *http.Request) (*models.Comment, *models.User, bool) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
+		writeAPIError(w, err)
+		return nil, nil, false
 	}
 	id, err := parseInt64Path(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
-		return
+		return nil, nil, false
 	}
 	c, err := s.Store.CommentByID(id, nil)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "comment not found")
-		return
+		return nil, nil, false
 	}
 	if c.Status != models.CommentStatusPending {
 		writeError(w, http.StatusConflict, "comment is not pending")
+		return nil, nil, false
+	}
+	return c, admin, true
+}
+
+func (s *Server) handleApproveComment(w http.ResponseWriter, r *http.Request) {
+	c, admin, ok := s.resolvePendingComment(w, r)
+	if !ok {
 		return
 	}
-	if err := s.Store.ApproveComment(id); err != nil {
+	if err := s.Store.ApproveComment(c.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "approve failed")
 		return
 	}
-	_ = s.Store.SetModerationReason(id, "")
-	s.Store.AddAudit(&admin.ID, admin.Name, "comment.approve", "comment", id, "")
+	_ = s.Store.SetModerationReason(c.ID, "")
+	s.Store.AddAudit(&admin.ID, admin.Name, "comment.approve", "comment", c.ID, "")
 	s.Hub.Publish(c.ThreadID, "comment")
-	s.notifyWebhook(map[string]any{"event": "comment.approved", "comment_id": id, "actor": admin.Email})
+	s.notifyWebhook(map[string]any{"event": "comment.approved", "comment_id": c.ID, "actor": admin.Email})
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleRejectComment(w http.ResponseWriter, r *http.Request) {
-	admin, err := requireAdmin(r)
-	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
-	id, err := parseInt64Path(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	c, err := s.Store.CommentByID(id, nil)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "comment not found")
-		return
-	}
-	if c.Status != models.CommentStatusPending {
-		writeError(w, http.StatusConflict, "comment is not pending")
+	c, admin, ok := s.resolvePendingComment(w, r)
+	if !ok {
 		return
 	}
 	var body struct {
 		Reason string `json:"reason"`
 	}
 	_ = decode(r, &body)
-	if err := s.Store.RejectComment(id); err != nil {
+	if err := s.Store.RejectComment(c.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "reject failed")
 		return
 	}
 	reason := strings.TrimSpace(body.Reason)
 	if reason != "" {
-		_ = s.Store.SetModerationReason(id, reason)
+		_ = s.Store.SetModerationReason(c.ID, reason)
 	}
-	s.Store.AddAudit(&admin.ID, admin.Name, "comment.reject", "comment", id, reason)
-	s.notifyWebhook(map[string]any{"event": "comment.rejected", "comment_id": id, "reason": reason, "actor": admin.Email})
+	s.Store.AddAudit(&admin.ID, admin.Name, "comment.reject", "comment", c.ID, reason)
+	s.notifyWebhook(map[string]any{"event": "comment.rejected", "comment_id": c.ID, "reason": reason, "actor": admin.Email})
 	w.WriteHeader(http.StatusNoContent)
 }

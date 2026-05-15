@@ -14,7 +14,7 @@ type createSiteReq struct {
 
 func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 	if _, err := requireAdmin(r); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	sites, err := s.Store.ListSites()
@@ -28,7 +28,7 @@ func (s *Server) handleListSites(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	var req createSiteReq

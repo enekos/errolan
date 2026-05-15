@@ -1,8 +1,6 @@
 package api
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,7 +9,7 @@ import (
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if _, err := requireAdmin(r); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	q := r.URL.Query()
@@ -32,12 +30,12 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	id, err := parseInt64Path(r, "id")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeAPIError(w, errInvalidID)
 		return
 	}
 	if id == admin.ID {
@@ -57,7 +55,7 @@ func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 		Banned bool `json:"banned"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+		writeAPIError(w, errInvalidBody)
 		return
 	}
 	if err := s.Store.SetUserBanned(id, req.Banned); err != nil {
@@ -71,7 +69,7 @@ func (s *Server) handleBanUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	if _, err := requireAdmin(r); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -88,7 +86,7 @@ func (s *Server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleThreadEvents(w http.ResponseWriter, r *http.Request) {
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	slug := r.PathValue("slug")
@@ -133,29 +131,4 @@ func (s *Server) handleThreadEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
-}
-
-// notifyWebhook fires ERROLAN_WEBHOOK_URL with a JSON payload if configured.
-// Best-effort: failures are logged but never affect the response.
-func (s *Server) notifyWebhook(payload map[string]any) {
-	if s.WebhookURL == "" {
-		return
-	}
-	go func() {
-		buf, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		client := &http.Client{Timeout: 5 * time.Second}
-		req, err := http.NewRequest(http.MethodPost, s.WebhookURL, bytes.NewReader(buf))
-		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "Errolan-Webhook/1.0")
-		resp, err := client.Do(req)
-		if err == nil {
-			resp.Body.Close()
-		}
-	}()
 }

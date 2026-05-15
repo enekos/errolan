@@ -3,9 +3,8 @@ package api
 import (
 	"compress/gzip"
 	"context"
-	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -27,16 +26,26 @@ const (
 // capped at 8 KB at the handler layer; this is a safety net for everything else.
 const maxRequestBody = 64 * 1024
 
-func recoverer(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("panic: %v\n%s", rec, debug.Stack())
-				writeError(w, http.StatusInternalServerError, "internal error")
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					logger.Error("panic",
+						"value", rec,
+						"path", r.URL.Path,
+						"method", r.Method,
+						"stack", string(debug.Stack()),
+					)
+					writeError(w, http.StatusInternalServerError, "internal error")
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // realIP extracts the trusted client IP. If trustForwarded is true, we honor
@@ -272,7 +281,7 @@ func siteFrom(r *http.Request) *models.Site {
 func requireUser(r *http.Request) (*models.User, error) {
 	u := userFrom(r)
 	if u == nil {
-		return nil, errors.New("authentication required")
+		return nil, errAuthRequired
 	}
 	return u, nil
 }
@@ -280,7 +289,7 @@ func requireUser(r *http.Request) (*models.User, error) {
 func requireSite(r *http.Request) (*models.Site, error) {
 	s := siteFrom(r)
 	if s == nil {
-		return nil, errors.New("X-Errolan-Site header required")
+		return nil, errSiteHeader
 	}
 	return s, nil
 }
@@ -291,7 +300,7 @@ func requireAdmin(r *http.Request) (*models.User, error) {
 		return nil, err
 	}
 	if !u.IsAdmin {
-		return nil, errors.New("admin only")
+		return nil, errAdminOnly
 	}
 	return u, nil
 }

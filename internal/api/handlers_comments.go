@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/enekos/errolan/internal/models"
+	"github.com/enekos/errolan/internal/moderation"
 	"github.com/enekos/errolan/internal/store"
 )
 
 func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	id, err := parseInt64Path(r, "id")
@@ -42,10 +43,52 @@ func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body length")
 		return
 	}
+
+	// Re-evaluate the edited body so a user can't post clean text then edit in
+	// blocked keywords / links to bypass the engine. Admins are exempt from the
+	// engine the same way they are on create.
+	thread, err := s.Store.ThreadByID(c.ThreadID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "thread lookup failed")
+		return
+	}
+	decision := s.evaluateComment(thread.SiteID, user, c.UserID == nil, body)
+
+	if decision.Action == moderation.ActionReject {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error":  "edit rejected by moderation",
+			"reason": decision.Reason,
+		})
+		return
+	}
+
 	if err := s.Store.UpdateCommentBody(id, body); err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+
+	// Hold-on-edit: move a previously visible comment back into the queue. The
+	// denormalised thread counter is corrected by SetCommentStatus. Pending or
+	// hidden comments stay where they are.
+	if decision.Action == moderation.ActionHold && c.Status == models.CommentStatusVisible {
+		if err := s.Store.SetCommentStatus(id, models.CommentStatusPending); err == nil {
+			_ = s.Store.SetModerationReason(id, decision.Reason)
+			s.Store.AddAudit(&user.ID, user.Name, "comment.hold_edit", "comment", id, decision.Reason)
+			s.Hub.Publish(c.ThreadID, "edit")
+			s.notifyWebhook(map[string]any{
+				"event":      "comment.pending",
+				"comment_id": id,
+				"reason":     decision.Reason,
+				"trigger":    "edit",
+			})
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status": "pending",
+				"reason": decision.Reason,
+			})
+			return
+		}
+	}
+
 	if user.IsAdmin && (c.UserID == nil || *c.UserID != user.ID) {
 		s.Store.AddAudit(&user.ID, user.Name, "comment.edit", "comment", id, "")
 	}
@@ -57,7 +100,7 @@ func (s *Server) handleEditComment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	id, err := parseInt64Path(r, "id")
@@ -89,7 +132,7 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVote(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	id, err := parseInt64Path(r, "id")
@@ -182,7 +225,7 @@ func (s *Server) handleFlag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePinComment(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	id, err := parseInt64Path(r, "id")
@@ -213,7 +256,7 @@ func (s *Server) handlePinComment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListFlagged(w http.ResponseWriter, r *http.Request) {
 	if _, err := requireAdmin(r); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	flagged, err := s.Store.ListFlagged(100)

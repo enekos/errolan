@@ -387,6 +387,24 @@
   color: var(--erl-ink);
   transition: background .15s;
 }
+/* Inline stamps appear directly under each anchored element on narrow viewports
+   (or when forceInline is set). They flow with the document instead of being
+   absolutely positioned, so they need their own visual treatment. */
+.erl-stamp-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--erl-rule);
+  background: var(--erl-paper-2);
+}
+.erl-stamp-inline.erl-stamp-active { border-left-color: var(--erl-accent); }
+.erl-stamp-inline .erl-stamp-meta { order: 1; }
+.erl-stamp-inline .erl-stamp-preview { flex: 1 1 220px; }
+.erl-stamp-inline .erl-stamp-author { margin-left: auto; }
 .erl-stamp:hover { background: var(--erl-paper-2); }
 .erl-stamp-active {
   background: var(--erl-paper-2);
@@ -481,7 +499,12 @@
   line-height: 1.5;
 }
 
-@media (max-width: 1100px) {
+/* Rail visibility is now handled in JS: below the inlineBreakpoint (default
+   900px) the SDK swaps the rail for inline stamps inserted after each anchored
+   element. This media rule is a defensive backstop in case JS hasn't run yet —
+   without it, a too-narrow rail could overlap article body text briefly during
+   first paint. */
+@media (max-width: 700px) {
   .erl-rail { display: none; }
 }
 

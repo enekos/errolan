@@ -43,14 +43,12 @@ func (h *Hub) Subscribe(threadID int64) (<-chan string, func()) {
 }
 
 func (h *Hub) Publish(threadID int64, event string) {
+	// Hold the lock for the non-blocking send so a concurrent cancel() can't
+	// close the channel between snapshot and send (panic on send-to-closed).
+	// Each send is select-with-default, so this never blocks under the lock.
 	h.mu.Lock()
-	subs := h.subscribers[threadID]
-	targets := make([]chan string, 0, len(subs))
-	for ch := range subs {
-		targets = append(targets, ch)
-	}
-	h.mu.Unlock()
-	for _, ch := range targets {
+	defer h.mu.Unlock()
+	for ch := range h.subscribers[threadID] {
 		select {
 		case ch <- event:
 		default:

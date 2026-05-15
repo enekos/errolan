@@ -27,7 +27,7 @@ func validEmojiCode(code string) bool {
 func (s *Server) handleReact(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	if !s.WriteLimiter.Allow("react:" + clientIP(r)) {
@@ -86,7 +86,7 @@ func (s *Server) handleReact(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListEmojis(w http.ResponseWriter, r *http.Request) {
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	emojis, err := s.Store.ListEmojis(site.ID)
@@ -109,12 +109,12 @@ type emojiReq struct {
 func (s *Server) handleUpsertEmoji(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	var req emojiReq
@@ -157,12 +157,12 @@ func (s *Server) handleUpsertEmoji(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteEmoji(w http.ResponseWriter, r *http.Request) {
 	admin, err := requireAdmin(r)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	site, err := requireSite(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, err)
 		return
 	}
 	code := r.PathValue("code")

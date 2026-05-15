@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -11,11 +12,17 @@ import (
 	"github.com/enekos/errolan/internal/lockout"
 	"github.com/enekos/errolan/internal/ratelimit"
 	"github.com/enekos/errolan/internal/store"
+	"github.com/enekos/errolan/internal/webhook"
 )
 
+// Server wires HTTP handlers to the store, auth, hub, caches, and limiters.
+// Construction lives in NewServer; fields are exposed so tests / main can
+// override defaults (e.g. swap in deterministic limiters).
 type Server struct {
 	Store     *store.Store
 	Auth      *auth.Service
+	Logger    *slog.Logger
+	Webhook   *webhook.Notifier
 	AdminCORS string
 	SDKDir    string
 
@@ -32,28 +39,76 @@ type Server struct {
 	Lockout       *lockout.Tracker   // per-account login lockout
 
 	Hub *hub.Hub
-
-	// WebhookURL, when set, receives moderation events as POST JSON.
-	WebhookURL string
 }
 
-func NewServer(st *store.Store, a *auth.Service) *Server {
+// ServerOptions bundles the cross-cutting dependencies that come from main.go
+// or a test. Anything not set falls back to safe defaults inside NewServer.
+type ServerOptions struct {
+	AdminCORS      string
+	SDKDir         string
+	TrustForwarded bool
+	WebhookURL     string
+	Logger         *slog.Logger
+}
+
+func NewServer(st *store.Store, a *auth.Service, opts ServerOptions) *Server {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.AdminCORS == "" {
+		opts.AdminCORS = "*"
+	}
 	return &Server{
-		Store:         st,
-		Auth:          a,
-		AdminCORS:     "*",
-		SiteCache:     cache.New(256, 60*time.Second),
-		GlobalLimiter: ratelimit.New(20, 60),       // 20 req/s, burst 60
-		AuthLimiter:   ratelimit.New(0.2, 5),       // 1 every 5s, burst 5
-		WriteLimiter:  ratelimit.New(0.5, 10),      // 1 every 2s, burst 10
-		Lockout:       lockout.New(5, 15*time.Minute, 15*time.Minute),
-		Hub:           hub.New(),
+		Store:          st,
+		Auth:           a,
+		Logger:         opts.Logger,
+		Webhook:        webhook.New(opts.WebhookURL, opts.Logger),
+		AdminCORS:      opts.AdminCORS,
+		SDKDir:         opts.SDKDir,
+		TrustForwarded: opts.TrustForwarded,
+		SiteCache:      cache.New(256, 60*time.Second),
+		GlobalLimiter:  ratelimit.New(20, 60),  // 20 req/s, burst 60
+		AuthLimiter:    ratelimit.New(0.2, 5),  // 1 every 5s, burst 5
+		WriteLimiter:   ratelimit.New(0.5, 10), // 1 every 2s, burst 10
+		Lockout:        lockout.New(5, 15*time.Minute, 15*time.Minute),
+		Hub:            hub.New(),
 	}
 }
 
+// notifyWebhook is a thin shim so handler code can keep the old call site.
+// All real work — fire-and-forget POST, timeout, logging — lives in the
+// webhook package.
+func (s *Server) notifyWebhook(payload map[string]any) {
+	s.Webhook.Send(payload)
+}
+
+// Handler builds the request-handling pipeline. Order: cors first (handles
+// OPTIONS), then recovery / security / gzip / realIP / rate limit / body limit
+// / site & user resolution / mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerRoutes(mux)
 
+	return s.cors(
+		recoverer(s.Logger)(
+			securityHeaders(
+				compress(
+					s.realIP(
+						s.rateLimit(
+							limitBody(
+								s.resolveSite(s.resolveUser(mux)),
+							),
+						),
+					),
+				),
+			),
+		),
+	)
+}
+
+// registerRoutes mounts every API endpoint on the supplied mux. Grouping the
+// declarations in one place makes the public surface obvious at a glance.
+func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -78,13 +133,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/comments/{id}", s.handleDeleteComment)
 	mux.HandleFunc("POST /api/comments/{id}/vote", s.handleVote)
 	mux.HandleFunc("POST /api/comments/{id}/flag", s.handleFlag)
-	mux.HandleFunc("POST /api/comments/{id}/pin", s.handlePinComment)       // admin
-	mux.HandleFunc("POST /api/comments/{id}/reactions", s.handleReact)      // toggle emoji reaction
+	mux.HandleFunc("POST /api/comments/{id}/pin", s.handlePinComment)  // admin
+	mux.HandleFunc("POST /api/comments/{id}/reactions", s.handleReact) // toggle emoji reaction
 
 	// Emoji pack (per site)
 	mux.HandleFunc("GET /api/emojis", s.handleListEmojis)
-	mux.HandleFunc("POST /api/emojis", s.handleUpsertEmoji)                 // admin
-	mux.HandleFunc("DELETE /api/emojis/{code}", s.handleDeleteEmoji)        // admin
+	mux.HandleFunc("POST /api/emojis", s.handleUpsertEmoji)          // admin
+	mux.HandleFunc("DELETE /api/emojis/{code}", s.handleDeleteEmoji) // admin
 
 	// Admin: users + audit
 	mux.HandleFunc("GET /api/admin/users", s.handleListUsers)
@@ -107,27 +162,9 @@ func (s *Server) Handler() http.Handler {
 		fs := http.FileServer(http.Dir(s.SDKDir))
 		mux.Handle("GET /sdk/", http.StripPrefix("/sdk/", fs))
 	}
-
-	// Order: cors first (handles OPTIONS), then recovery / security / gzip /
-	// realIP / rate limit / body limit / site & user resolution.
-	return s.cors(
-		recoverer(
-			securityHeaders(
-				compress(
-					s.realIP(
-						s.rateLimit(
-							limitBody(
-								s.resolveSite(s.resolveUser(mux)),
-							),
-						),
-					),
-				),
-			),
-		),
-	)
 }
 
-// ----- helpers -----
+// ----- response helpers -----
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
