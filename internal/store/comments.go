@@ -14,28 +14,27 @@ const commentCols = `id, thread_id, parent_id, user_id, author_name, body, statu
 // comments table to others where a bare column name would be ambiguous.
 const commentColsPrefixed = `c.id, c.thread_id, c.parent_id, c.user_id, c.author_name, c.body, c.status, c.score, c.pinned, c.edit_count, c.anchor, c.moderation_reason, c.created_at, c.updated_at`
 
-func scanCommentInto(c *models.Comment, row scanner, withVote bool) error {
+func scanCommentInto(c *models.Comment, row scanner) error {
 	var pinned int
-	if withVote {
-		var myVote sql.NullInt64
-		if err := row.Scan(
-			&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
-			&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
-			&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &myVote,
-		); err != nil {
-			return err
-		}
-		if myVote.Valid {
-			c.MyVote = int(myVote.Int64)
-		}
-	} else {
-		if err := row.Scan(
-			&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
-			&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
-			&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt,
-		); err != nil {
-			return err
-		}
+	if err := row.Scan(
+		&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
+		&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+		&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt,
+	); err != nil {
+		return err
+	}
+	c.Pinned = pinned != 0
+	return nil
+}
+
+func scanCommentWithVote(c *models.Comment, row scanner) error {
+	var pinned int
+	if err := row.Scan(
+		&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
+		&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+		&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &c.MyVote,
+	); err != nil {
+		return err
 	}
 	c.Pinned = pinned != 0
 	return nil
@@ -43,7 +42,7 @@ func scanCommentInto(c *models.Comment, row scanner, withVote bool) error {
 
 func scanComment(row scanner) (*models.Comment, error) {
 	c := &models.Comment{}
-	if err := scanCommentInto(c, row, false); err != nil {
+	if err := scanCommentInto(c, row); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -131,17 +130,16 @@ func (s *Store) CountUserComments(userID int64) (int, error) {
 }
 
 func (s *Store) CommentByID(id int64, viewerID *int64) (*models.Comment, error) {
-	cols := commentCols
-	joins := ""
-	args := []any{id}
+	viewerIDArg := int64(-1)
 	if viewerID != nil {
-		cols += ", v.value"
-		joins = " LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ?"
-		args = append([]any{*viewerID}, args...)
+		viewerIDArg = *viewerID
 	}
-	row := s.DB.QueryRow(fmt.Sprintf(`SELECT %s FROM comments c%s WHERE c.id = ?`, cols, joins), args...)
+	row := s.DB.QueryRow(
+		`SELECT `+commentCols+`, COALESCE(v.value, 0) FROM comments c LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ? WHERE c.id = ?`,
+		viewerIDArg, id,
+	)
 	c := &models.Comment{}
-	if err := scanCommentInto(c, row, viewerID != nil); err != nil {
+	if err := scanCommentWithVote(c, row); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -215,14 +213,12 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 		limitClause = fmt.Sprintf(" LIMIT %d", opts.Limit+1)
 	}
 
-	cols := commentColsPrefixed
-	joins := ""
+	viewerIDArg := int64(-1)
 	if opts.ViewerID != nil {
-		cols += ", v.value"
-		joins = " LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ?"
-		args = append([]any{*opts.ViewerID}, args...)
+		viewerIDArg = *opts.ViewerID
 	}
-	q := fmt.Sprintf(`SELECT %s FROM comments c%s WHERE %s ORDER BY %s%s`, cols, joins, where, opts.Sort.clause(), limitClause)
+	args = append([]any{viewerIDArg}, args...)
+	q := fmt.Sprintf(`SELECT %s, COALESCE(v.value, 0) FROM comments c LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ? WHERE %s ORDER BY %s%s`, commentColsPrefixed, where, opts.Sort.clause(), limitClause)
 
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
@@ -234,7 +230,7 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 	top := make([]*models.Comment, 0, opts.Limit+1)
 	i := 0
 	for rows.Next() {
-		if err := scanCommentInto(&topBuf[i], rows, opts.ViewerID != nil); err != nil {
+		if err := scanCommentWithVote(&topBuf[i], rows); err != nil {
 			return nil, false, err
 		}
 		top = append(top, &topBuf[i])
@@ -263,16 +259,14 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		statusFilter = " AND c.status != 'pending'"
 	}
 
-	cols := commentColsPrefixed
-	joins := ""
+	viewerIDArg := int64(-1)
 	if viewerID != nil {
-		cols += ", v.value"
-		joins = " LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ?"
-		args = append([]any{*viewerID}, args...)
+		viewerIDArg = *viewerID
 	}
+	args = append([]any{viewerIDArg}, args...)
 	placeholders := inPlaceholders(len(byID))
-	q := fmt.Sprintf(`SELECT %s FROM comments c%s WHERE c.parent_id IN (%s)%s ORDER BY c.created_at ASC`,
-		cols, joins, placeholders, statusFilter)
+	q := fmt.Sprintf(`SELECT %s, COALESCE(v.value, 0) FROM comments c LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ? WHERE c.parent_id IN (%s)%s ORDER BY c.created_at ASC`,
+		commentColsPrefixed, placeholders, statusFilter)
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -289,12 +283,12 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		var c *models.Comment
 		if i < len(replyBuf) {
 			c = &replyBuf[i]
-			if err := scanCommentInto(c, rows, viewerID != nil); err != nil {
+			if err := scanCommentWithVote(c, rows); err != nil {
 				return nil, err
 			}
 		} else {
 			c = &models.Comment{}
-			if err := scanCommentInto(c, rows, viewerID != nil); err != nil {
+			if err := scanCommentWithVote(c, rows); err != nil {
 				return nil, err
 			}
 		}
