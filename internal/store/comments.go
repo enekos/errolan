@@ -298,33 +298,6 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 	return out, rows.Err()
 }
 
-// attachViewerVotes fills c.MyVote for every comment in byID in one query.
-func (s *Store) attachViewerVotes(byID map[int64]*models.Comment, viewerID int64) {
-	if len(byID) == 0 {
-		return
-	}
-	args := make([]any, 0, len(byID)+1)
-	args = append(args, viewerID)
-	for id := range byID {
-		args = append(args, id)
-	}
-	q := fmt.Sprintf(`SELECT comment_id, value FROM votes WHERE user_id = ? AND comment_id IN (%s)`, inPlaceholders(len(byID)))
-	rows, err := s.DB.Query(q, args...)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int64
-		var v int
-		if err := rows.Scan(&cid, &v); err == nil {
-			if c, ok := byID[cid]; ok {
-				c.MyVote = v
-			}
-		}
-	}
-}
-
 // attachAvatars batches a single SELECT for the registered-user emails referenced
 // by the comments and populates AvatarURL from the Gravatar hash.
 func (s *Store) attachAvatars(byID map[int64]*models.Comment) {
