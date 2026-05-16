@@ -41,10 +41,15 @@ func setupBenchDB(b *testing.B) (*sql.DB, int64, func()) {
 
 func seedComments(b *testing.B, conn *sql.DB, threadID int64, numTopLevel, repliesPerTop int) {
 	b.Helper()
+	tx, err := conn.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tx.Commit()
 	now := int64(1000000)
 	// Insert top-level comments
 	for i := 0; i < numTopLevel; i++ {
-		res, err := conn.Exec(
+		res, err := tx.Exec(
 			`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at)
 			 VALUES (?, NULL, NULL, ?, ?, 'visible', ?, 0, 0, '', ?, ?)`,
 			threadID, fmt.Sprintf("author_%d", i), fmt.Sprintf("body_%d", i), i%100, now+int64(i), now+int64(i))
@@ -53,7 +58,7 @@ func seedComments(b *testing.B, conn *sql.DB, threadID int64, numTopLevel, repli
 		}
 		parentID, _ := res.LastInsertId()
 		for j := 0; j < repliesPerTop; j++ {
-			_, err := conn.Exec(
+			_, err := tx.Exec(
 				`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at)
 				 VALUES (?, ?, NULL, ?, ?, 'visible', ?, 0, 0, '', ?, ?)`,
 				threadID, parentID, fmt.Sprintf("reply_author_%d_%d", i, j), fmt.Sprintf("reply_body_%d_%d", i, j), j%50, now+int64(i*1000+j), now+int64(i*1000+j))
@@ -66,20 +71,24 @@ func seedComments(b *testing.B, conn *sql.DB, threadID int64, numTopLevel, repli
 
 func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 	b.Helper()
+	tx, err := conn.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tx.Commit()
 	// Insert users
 	for i := 0; i < numUsers; i++ {
-		_, err := conn.Exec(`INSERT INTO users (email, name, password_hash, is_admin, is_banned, created_at) VALUES (?, ?, '', 0, 0, ?)`,
+		_, err := tx.Exec(`INSERT INTO users (email, name, password_hash, is_admin, is_banned, created_at) VALUES (?, ?, '', 0, 0, ?)`,
 			fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User%d", i), int64(i))
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
 	// Vote on comments in the thread
-	rows, err := conn.Query(`SELECT id FROM comments WHERE thread_id = ?`, threadID)
+	rows, err := tx.Query(`SELECT id FROM comments WHERE thread_id = ?`, threadID)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer rows.Close()
 	var cids []int64
 	for rows.Next() {
 		var id int64
@@ -88,6 +97,7 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 		}
 		cids = append(cids, id)
 	}
+	rows.Close()
 	for ui := 0; ui < numUsers; ui++ {
 		for _, cid := range cids {
 			if (ui+int(cid))%3 == 0 {
@@ -97,7 +107,7 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 			if (ui+int(cid))%5 == 0 {
 				val = -1
 			}
-			_, err := conn.Exec(`INSERT INTO votes (user_id, comment_id, value, created_at) VALUES (?, ?, ?, ?)`,
+			_, err := tx.Exec(`INSERT INTO votes (user_id, comment_id, value, created_at) VALUES (?, ?, ?, ?)`,
 				ui+1, cid, val, int64(ui)+cid)
 			if err != nil {
 				b.Fatal(err)
@@ -108,20 +118,24 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 
 func seedReactions(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 	b.Helper()
+	tx, err := conn.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tx.Commit()
 	// Insert emojis
 	codes := []string{"like", "heart", "fire", "rocket", "eyes"}
 	for _, code := range codes {
-		_, err := conn.Exec(`INSERT INTO emojis (site_id, code, label, svg, sort, created_at) VALUES (1, ?, ?, '', 0, 1)`, code, code)
+		_, err := tx.Exec(`INSERT INTO emojis (site_id, code, label, svg, sort, created_at) VALUES (1, ?, ?, '', 0, 1)`, code, code)
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
 	// Insert reaction_counts and reactions
-	rows, err := conn.Query(`SELECT id FROM comments WHERE thread_id = ?`, threadID)
+	rows, err := tx.Query(`SELECT id FROM comments WHERE thread_id = ?`, threadID)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer rows.Close()
 	var cids []int64
 	for rows.Next() {
 		var id int64
@@ -130,15 +144,16 @@ func seedReactions(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 		}
 		cids = append(cids, id)
 	}
+	rows.Close()
 	for ui := 0; ui < numUsers; ui++ {
 		for _, cid := range cids {
 			code := codes[(ui+int(cid))%len(codes)]
-			_, err := conn.Exec(`INSERT INTO reactions (user_id, comment_id, code, created_at) VALUES (?, ?, ?, ?)`,
+			_, err := tx.Exec(`INSERT INTO reactions (user_id, comment_id, code, created_at) VALUES (?, ?, ?, ?)`,
 				ui+1, cid, code, int64(ui)+cid)
 			if err != nil {
 				b.Fatal(err)
 			}
-			_, err = conn.Exec(`INSERT INTO reaction_counts (comment_id, code, count) VALUES (?, ?, 1)
+			_, err = tx.Exec(`INSERT INTO reaction_counts (comment_id, code, count) VALUES (?, ?, 1)
 				ON CONFLICT(comment_id, code) DO UPDATE SET count = count + 1`, cid, code)
 			if err != nil {
 				b.Fatal(err)
