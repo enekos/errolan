@@ -231,9 +231,15 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 	top := make([]*models.Comment, 0, opts.Limit+1)
 	i := 0
 	for rows.Next() {
-		if err := scanCommentWithVote(&topBuf[i], rows); err != nil {
+		var pinned int
+		if err := rows.Scan(
+			&topBuf[i].ID, &topBuf[i].ThreadID, &topBuf[i].ParentID, &topBuf[i].UserID, &topBuf[i].AuthorName, &topBuf[i].Body,
+			&topBuf[i].Status, &topBuf[i].Score, &pinned, &topBuf[i].EditCount, &topBuf[i].Anchor,
+			&topBuf[i].ModerationReason, &topBuf[i].CreatedAt, &topBuf[i].UpdatedAt, &topBuf[i].MyVote,
+		); err != nil {
 			return nil, false, err
 		}
+		topBuf[i].Pinned = pinned != 0
 		top = append(top, &topBuf[i])
 		i++
 	}
@@ -289,15 +295,18 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		var c *models.Comment
 		if i < len(replyBuf) {
 			c = &replyBuf[i]
-			if err := scanCommentWithVote(c, rows); err != nil {
-				return nil, err
-			}
 		} else {
 			c = &models.Comment{}
-			if err := scanCommentWithVote(c, rows); err != nil {
-				return nil, err
-			}
 		}
+		var pinned int
+		if err := rows.Scan(
+			&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
+			&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+			&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &c.MyVote,
+		); err != nil {
+			return nil, err
+		}
+		c.Pinned = pinned != 0
 		out = append(out, c)
 		i++
 	}
