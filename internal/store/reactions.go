@@ -52,30 +52,23 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	if len(byID) == 0 {
 		return
 	}
-	ids := make([]int64, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	// Sort IDs so SQLite can do sequential index scans instead of random lookups.
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	// Try cache first.
-	missing := make([]int64, 0, len(ids))
+	// Try cache first, iterating the map directly. Only sort the missing IDs
+	// if we actually need to hit the database.
+	missing := make([]int64, 0, len(byID))
 	s.reactMu.RLock()
-	for _, id := range ids {
+	for id, c := range byID {
 		if entry, ok := s.reactCache[id]; ok {
-			if c := byID[id]; c != nil {
-				if entry.reactions != nil {
-					c.Reactions = make(map[string]int, len(entry.reactions))
-					for k, v := range entry.reactions {
-						c.Reactions[k] = v
-					}
+			if entry.reactions != nil {
+				c.Reactions = make(map[string]int, len(entry.reactions))
+				for k, v := range entry.reactions {
+					c.Reactions[k] = v
 				}
-				if viewerID != nil {
-					if codes, ok := entry.myReacts[*viewerID]; ok {
-						c.MyReacts = make([]string, len(codes))
-						copy(c.MyReacts, codes)
-					}
+			}
+			if viewerID != nil {
+				if codes, ok := entry.myReacts[*viewerID]; ok {
+					c.MyReacts = make([]string, len(codes))
+					copy(c.MyReacts, codes)
 				}
 			}
 		} else {
@@ -87,6 +80,8 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		return
 	}
 
+	// Sort missing IDs so SQLite can do sequential index scans.
+	sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
 	args := make([]any, 0, len(missing))
 	for _, id := range missing {
 		args = append(args, id)
