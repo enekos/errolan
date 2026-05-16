@@ -35,7 +35,8 @@ type Store struct {
 	emojiCache map[int64][]*models.Emoji
 	userMu     sync.RWMutex
 	userCache  map[int64]*models.User
-	reactCache sync.Map // int64 → *reactCacheEntry
+	reactMu    sync.RWMutex
+	reactCache map[int64]*reactCacheEntry
 }
 
 func New(db *sql.DB) *Store {
@@ -43,6 +44,7 @@ func New(db *sql.DB) *Store {
 		DB:         db,
 		emojiCache: make(map[int64][]*models.Emoji),
 		userCache:  make(map[int64]*models.User),
+		reactCache: make(map[int64]*reactCacheEntry),
 	}
 }
 

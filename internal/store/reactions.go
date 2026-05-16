@@ -61,9 +61,9 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 
 	// Try cache first.
 	missing := make([]int64, 0, len(ids))
+	s.reactMu.RLock()
 	for _, id := range ids {
-		if v, ok := s.reactCache.Load(id); ok {
-			entry := v.(*reactCacheEntry)
+		if entry, ok := s.reactCache[id]; ok {
 			if c := byID[id]; c != nil {
 				if entry.reactions != nil {
 					c.Reactions = make(map[string]int, len(entry.reactions))
@@ -82,6 +82,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 			missing = append(missing, id)
 		}
 	}
+	s.reactMu.RUnlock()
 	if len(missing) == 0 {
 		return
 	}
@@ -117,6 +118,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 			}
 		}
 		// Populate cache for queried comments.
+		s.reactMu.Lock()
 		for _, id := range missing {
 			if c := byID[id]; c != nil {
 				entry := &reactCacheEntry{
@@ -128,9 +130,10 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 				}
 				entry.myReacts[*viewerID] = make([]string, len(c.MyReacts))
 				copy(entry.myReacts[*viewerID], c.MyReacts)
-				s.reactCache.Store(id, entry)
+				s.reactCache[id] = entry
 			}
 		}
+		s.reactMu.Unlock()
 		return
 	}
 
@@ -154,6 +157,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		}
 	}
 	// Populate cache for queried comments.
+	s.reactMu.Lock()
 	for _, id := range missing {
 		if c := byID[id]; c != nil {
 			entry := &reactCacheEntry{
@@ -163,9 +167,10 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 			for k, v := range c.Reactions {
 				entry.reactions[k] = v
 			}
-			s.reactCache.Store(id, entry)
+			s.reactCache[id] = entry
 		}
 	}
+	s.reactMu.Unlock()
 }
 
 // ToggleReaction adds or removes a (user, comment, code) reaction. Returns the
@@ -242,6 +247,8 @@ func (s *Store) ToggleReaction(userID, commentID int64, code string) (count int,
 	if err := tx.Commit(); err != nil {
 		return 0, false, err
 	}
-	s.reactCache.Delete(commentID)
+	s.reactMu.Lock()
+	delete(s.reactCache, commentID)
+	s.reactMu.Unlock()
 	return count, active, nil
 }
