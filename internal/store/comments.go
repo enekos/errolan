@@ -131,16 +131,21 @@ func (s *Store) CountUserComments(userID int64) (int, error) {
 }
 
 func (s *Store) CommentByID(id int64, viewerID *int64) (*models.Comment, error) {
-	row := s.DB.QueryRow(`SELECT `+commentCols+` FROM comments WHERE id = ?`, id)
-	c, err := scanComment(row)
-	if err == sql.ErrNoRows {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
+	cols := commentCols
+	joins := ""
+	args := []any{id}
 	if viewerID != nil {
-		s.DB.QueryRow(`SELECT value FROM votes WHERE user_id = ? AND comment_id = ?`, *viewerID, c.ID).Scan(&c.MyVote)
+		cols += ", v.value"
+		joins = " LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ?"
+		args = append([]any{*viewerID}, args...)
+	}
+	row := s.DB.QueryRow(fmt.Sprintf(`SELECT %s FROM comments c%s WHERE c.id = ?`, cols, joins), args...)
+	c := &models.Comment{}
+	if err := scanCommentInto(c, row, viewerID != nil); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
 	}
 	return c, nil
 }
