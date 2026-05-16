@@ -48,7 +48,8 @@ func seedComments(b *testing.B, conn *sql.DB, threadID int64, numTopLevel, repli
 	}
 	defer tx.Commit()
 	now := int64(1000000)
-	// Insert top-level comments
+	// Insert top-level comments individually to get parent IDs
+	parentIDs := make([]int64, numTopLevel)
 	for i := 0; i < numTopLevel; i++ {
 		res, err := tx.Exec(
 			`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at)
@@ -57,15 +58,30 @@ func seedComments(b *testing.B, conn *sql.DB, threadID int64, numTopLevel, repli
 		if err != nil {
 			b.Fatal(err)
 		}
-		parentID, _ := res.LastInsertId()
+		parentIDs[i], _ = res.LastInsertId()
+	}
+	// Batch insert replies
+	const batchSize = 200
+	values := make([]string, 0, batchSize)
+	args := make([]any, 0, batchSize*12)
+	for i := 0; i < numTopLevel; i++ {
 		for j := 0; j < repliesPerTop; j++ {
-			_, err := tx.Exec(
-				`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at)
-				 VALUES (?, ?, NULL, ?, ?, 'visible', ?, 0, 0, '', ?, ?)`,
-				threadID, parentID, fmt.Sprintf("reply_author_%d_%d", i, j), fmt.Sprintf("reply_body_%d_%d", i, j), j%50, now+int64(i*1000+j), now+int64(i*1000+j))
-			if err != nil {
-				b.Fatal(err)
+			values = append(values, "(?,?,?,?,?,?,?,?,?,?,?,?)")
+			args = append(args, threadID, parentIDs[i], nil, fmt.Sprintf("reply_author_%d_%d", i, j), fmt.Sprintf("reply_body_%d_%d", i, j), "visible", j%50, 0, 0, "", now+int64(i*1000+j), now+int64(i*1000+j))
+			if len(values) >= batchSize {
+				_, err := tx.Exec(`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at) VALUES `+strings.Join(values, ","), args...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				values = values[:0]
+				args = args[:0]
 			}
+		}
+	}
+	if len(values) > 0 {
+		_, err := tx.Exec(`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, created_at, updated_at) VALUES `+strings.Join(values, ","), args...)
+		if err != nil {
+			b.Fatal(err)
 		}
 	}
 }
@@ -78,9 +94,22 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 	}
 	defer tx.Commit()
 	// Insert users
+	values := make([]string, 0, 200)
+	args := make([]any, 0, 200*4)
 	for i := 0; i < numUsers; i++ {
-		_, err := tx.Exec(`INSERT INTO users (email, name, password_hash, is_admin, is_banned, created_at) VALUES (?, ?, '', 0, 0, ?)`,
-			fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User%d", i), int64(i))
+		values = append(values, "(?,?,'',0,0,?)")
+		args = append(args, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User%d", i), int64(i))
+		if len(values) >= 200 {
+			_, err := tx.Exec(`INSERT INTO users (email, name, password_hash, is_admin, is_banned, created_at) VALUES `+strings.Join(values, ","), args...)
+			if err != nil {
+				b.Fatal(err)
+			}
+			values = values[:0]
+			args = args[:0]
+		}
+	}
+	if len(values) > 0 {
+		_, err := tx.Exec(`INSERT INTO users (email, name, password_hash, is_admin, is_banned, created_at) VALUES `+strings.Join(values, ","), args...)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -99,6 +128,10 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 		cids = append(cids, id)
 	}
 	rows.Close()
+	// Batch insert votes
+	const batchSize = 200
+	voteValues := make([]string, 0, batchSize)
+	voteArgs := make([]any, 0, batchSize*4)
 	for ui := 0; ui < numUsers; ui++ {
 		for _, cid := range cids {
 			if (ui+int(cid))%3 == 0 {
@@ -108,11 +141,22 @@ func seedVotes(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 			if (ui+int(cid))%5 == 0 {
 				val = -1
 			}
-			_, err := tx.Exec(`INSERT INTO votes (user_id, comment_id, value, created_at) VALUES (?, ?, ?, ?)`,
-				ui+1, cid, val, int64(ui)+cid)
-			if err != nil {
-				b.Fatal(err)
+			voteValues = append(voteValues, "(?,?,?,?)")
+			voteArgs = append(voteArgs, ui+1, cid, val, int64(ui)+cid)
+			if len(voteValues) >= batchSize {
+				_, err := tx.Exec(`INSERT INTO votes (user_id, comment_id, value, created_at) VALUES `+strings.Join(voteValues, ","), voteArgs...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				voteValues = voteValues[:0]
+				voteArgs = voteArgs[:0]
 			}
+		}
+	}
+	if len(voteValues) > 0 {
+		_, err := tx.Exec(`INSERT INTO votes (user_id, comment_id, value, created_at) VALUES `+strings.Join(voteValues, ","), voteArgs...)
+		if err != nil {
+			b.Fatal(err)
 		}
 	}
 }
