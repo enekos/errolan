@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/enekos/errolan/internal/models"
@@ -250,8 +251,13 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 // listRepliesFor fetches every reply whose parent_id is one of the top-level
 // comment IDs already in byID, in a single round-trip.
 func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bool, viewerID *int64) ([]*models.Comment, error) {
-	args := make([]any, 0, len(byID))
+	ids := make([]int64, 0, len(byID))
 	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
 		args = append(args, id)
 	}
 	statusFilter := ""
@@ -310,8 +316,13 @@ func (s *Store) attachAvatars(byID map[int64]*models.Comment) {
 	if len(userIDs) == 0 {
 		return
 	}
-	args := make([]any, 0, len(userIDs))
+	ids := make([]int64, 0, len(userIDs))
 	for id := range userIDs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
 		args = append(args, id)
 	}
 	q := "SELECT id, email FROM users WHERE id IN (" + inPlaceholders(len(userIDs)) + ")"

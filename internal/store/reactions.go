@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -51,8 +52,14 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	if len(byID) == 0 {
 		return
 	}
-	args := make([]any, 0, len(byID))
+	ids := make([]int64, 0, len(byID))
 	for id := range byID {
+		ids = append(ids, id)
+	}
+	// Sort IDs so SQLite can do sequential index scans instead of random lookups.
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
 		args = append(args, id)
 	}
 
