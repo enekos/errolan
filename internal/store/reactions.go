@@ -22,7 +22,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		args = append(args, id)
 	}
 	q := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code || ':' || count, ',')
-		FROM reaction_counts WHERE comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(byID)))
+		FROM reaction_counts WHERE comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(args)))
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return
@@ -51,7 +51,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	}
 	mArgs := append([]any{*viewerID}, args...)
 	mq := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code, ',')
-		FROM reactions WHERE user_id = ? AND comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(byID)))
+		FROM reactions WHERE user_id = ? AND comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(args)))
 	mrows, err := s.DB.Query(mq, mArgs...)
 	if err != nil {
 		return
