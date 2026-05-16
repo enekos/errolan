@@ -21,6 +21,9 @@ var (
 	ErrConflict = errors.New("conflict")
 )
 
+var placeholderCache sync.Map // int → "?,?,?"
+
+
 type Store struct {
 	DB        *sql.DB
 	emojiMu   sync.RWMutex
@@ -47,11 +50,17 @@ func boolInt(b bool) int {
 }
 
 // inPlaceholders builds "?,?,?,…" with n placeholders. Used for IN (…) lists.
+// Results are cached so repeated sizes avoid string allocation.
 func inPlaceholders(n int) string {
 	if n <= 0 {
 		return ""
 	}
-	return strings.Repeat("?,", n-1) + "?"
+	if s, ok := placeholderCache.Load(n); ok {
+		return s.(string)
+	}
+	s := strings.Repeat("?,", n-1) + "?"
+	placeholderCache.Store(n, s)
+	return s
 }
 
 // gravatarURL is the canonical Gravatar URL for an email address. Empty email
