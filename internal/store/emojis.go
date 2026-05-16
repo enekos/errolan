@@ -7,6 +7,13 @@ import (
 )
 
 func (s *Store) ListEmojis(siteID int64) ([]*models.Emoji, error) {
+	s.emojiMu.RLock()
+	if emojis, ok := s.emojiCache[siteID]; ok {
+		s.emojiMu.RUnlock()
+		return emojis, nil
+	}
+	s.emojiMu.RUnlock()
+
 	rows, err := s.DB.Query(
 		`SELECT id, site_id, code, label, svg, sort, created_at FROM emojis WHERE site_id = ? ORDER BY sort, id`,
 		siteID,
@@ -23,7 +30,13 @@ func (s *Store) ListEmojis(siteID int64) ([]*models.Emoji, error) {
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.emojiMu.Lock()
+	s.emojiCache[siteID] = out
+	s.emojiMu.Unlock()
+	return out, nil
 }
 
 func (s *Store) UpsertEmoji(siteID int64, code, label, svg string, sortOrder int) (*models.Emoji, error) {
@@ -41,7 +54,13 @@ func (s *Store) UpsertEmoji(siteID int64, code, label, svg string, sortOrder int
 		`SELECT id, site_id, code, label, svg, sort, created_at FROM emojis WHERE site_id = ? AND code = ?`,
 		siteID, code,
 	).Scan(&e.ID, &e.SiteID, &e.Code, &e.Label, &e.SVG, &e.Sort, &e.CreatedAt)
-	return e, err
+	if err != nil {
+		return nil, err
+	}
+	s.emojiMu.Lock()
+	delete(s.emojiCache, siteID)
+	s.emojiMu.Unlock()
+	return e, nil
 }
 
 func (s *Store) DeleteEmoji(siteID int64, code string) error {
@@ -53,23 +72,23 @@ func (s *Store) DeleteEmoji(siteID int64, code string) error {
 	if n == 0 {
 		return ErrNotFound
 	}
+	s.emojiMu.Lock()
+	delete(s.emojiCache, siteID)
+	s.emojiMu.Unlock()
 	return nil
 }
 
 // CodesForSite returns the set of valid emoji codes for a site. Used to gate
-// reactions so users can't react with arbitrary strings.
+// reactions so users can't react with arbitrary strings. Reuses the ListEmojis
+// cache to avoid a separate round-trip.
 func (s *Store) CodesForSite(siteID int64) (map[string]struct{}, error) {
-	rows, err := s.DB.Query(`SELECT code FROM emojis WHERE site_id = ?`, siteID)
+	emojis, err := s.ListEmojis(siteID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make(map[string]struct{})
-	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err == nil {
-			out[code] = struct{}{}
-		}
+	out := make(map[string]struct{}, len(emojis))
+	for _, e := range emojis {
+		out[e.Code] = struct{}{}
 	}
-	return out, rows.Err()
+	return out, nil
 }

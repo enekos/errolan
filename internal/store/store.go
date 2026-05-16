@@ -11,6 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+
+	"github.com/enekos/errolan/internal/models"
 )
 
 var (
@@ -19,10 +22,12 @@ var (
 )
 
 type Store struct {
-	DB *sql.DB
+	DB        *sql.DB
+	emojiMu   sync.RWMutex
+	emojiCache map[int64][]*models.Emoji
 }
 
-func New(db *sql.DB) *Store { return &Store{DB: db} }
+func New(db *sql.DB) *Store { return &Store{DB: db, emojiCache: make(map[int64][]*models.Emoji)} }
 
 // newAPIKey returns a fresh "erl_…" site key. 24 random bytes = 192 bits of
 // entropy, hex-encoded so the result is safe in URLs and headers.
