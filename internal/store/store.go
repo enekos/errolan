@@ -56,12 +56,19 @@ func inPlaceholders(n int) string {
 
 // gravatarURL is the canonical Gravatar URL for an email address. Empty email
 // returns the empty string so callers can attach unconditionally.
+var gravatarCache sync.Map // email → url
+
 func gravatarURL(email string) string {
 	if email == "" {
 		return ""
 	}
+	if url, ok := gravatarCache.Load(email); ok {
+		return url.(string)
+	}
 	sum := md5.Sum([]byte(strings.ToLower(strings.TrimSpace(email))))
-	return fmt.Sprintf("https://www.gravatar.com/avatar/%s?s=64&d=mp", hex.EncodeToString(sum[:]))
+	url := fmt.Sprintf("https://www.gravatar.com/avatar/%s?s=64&d=mp", hex.EncodeToString(sum[:]))
+	gravatarCache.Store(email, url)
+	return url
 }
 
 // scanner is the common shape between *sql.Row and *sql.Rows so per-entity
