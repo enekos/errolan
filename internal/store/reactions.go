@@ -18,23 +18,23 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		args = append(args, id)
 	}
 	q := "SELECT comment_id, code, count FROM reaction_counts WHERE comment_id IN (" + inPlaceholders(len(byID)) + ")"
-	if rows, err := s.DB.Query(q, args...); err == nil {
-		func() {
-			defer rows.Close()
-			for rows.Next() {
-				var cid int64
-				var code string
-				var count int
-				if err := rows.Scan(&cid, &code, &count); err == nil {
-					if c, ok := byID[cid]; ok {
-						if c.Reactions == nil {
-							c.Reactions = make(map[string]int)
-						}
-						c.Reactions[code] = count
-					}
+	rows, err := s.DB.Query(q, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int64
+		var code string
+		var count int
+		if err := rows.Scan(&cid, &code, &count); err == nil {
+			if c, ok := byID[cid]; ok {
+				if c.Reactions == nil {
+					c.Reactions = make(map[string]int)
 				}
+				c.Reactions[code] = count
 			}
-		}()
+		}
 	}
 	if viewerID == nil {
 		return
