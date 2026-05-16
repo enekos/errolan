@@ -24,12 +24,18 @@ var (
 var placeholderCache sync.Map // int → "?,?,?"
 
 
+type reactCacheEntry struct {
+	reactions map[string]int
+	myReacts  map[int64][]string
+}
+
 type Store struct {
 	DB         *sql.DB
 	emojiMu    sync.RWMutex
 	emojiCache map[int64][]*models.Emoji
 	userMu     sync.RWMutex
 	userCache  map[int64]*models.User
+	reactCache sync.Map // int64 → *reactCacheEntry
 }
 
 func New(db *sql.DB) *Store {

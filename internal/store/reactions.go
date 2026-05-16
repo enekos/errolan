@@ -58,8 +58,36 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	}
 	// Sort IDs so SQLite can do sequential index scans instead of random lookups.
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	args := make([]any, 0, len(ids))
+
+	// Try cache first.
+	missing := make([]int64, 0, len(ids))
 	for _, id := range ids {
+		if v, ok := s.reactCache.Load(id); ok {
+			entry := v.(*reactCacheEntry)
+			if c := byID[id]; c != nil {
+				if entry.reactions != nil {
+					c.Reactions = make(map[string]int, len(entry.reactions))
+					for k, v := range entry.reactions {
+						c.Reactions[k] = v
+					}
+				}
+				if viewerID != nil {
+					if codes, ok := entry.myReacts[*viewerID]; ok {
+						c.MyReacts = make([]string, len(codes))
+						copy(c.MyReacts, codes)
+					}
+				}
+			}
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	args := make([]any, 0, len(missing))
+	for _, id := range missing {
 		args = append(args, id)
 	}
 
@@ -88,6 +116,21 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 				}
 			}
 		}
+		// Populate cache for queried comments.
+		for _, id := range missing {
+			if c := byID[id]; c != nil {
+				entry := &reactCacheEntry{
+					reactions: make(map[string]int, len(c.Reactions)),
+					myReacts:  make(map[int64][]string),
+				}
+				for k, v := range c.Reactions {
+					entry.reactions[k] = v
+				}
+				entry.myReacts[*viewerID] = make([]string, len(c.MyReacts))
+				copy(entry.myReacts[*viewerID], c.MyReacts)
+				s.reactCache.Store(id, entry)
+			}
+		}
 		return
 	}
 
@@ -108,6 +151,19 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 				}
 				parseReactions(raw, c.Reactions)
 			}
+		}
+	}
+	// Populate cache for queried comments.
+	for _, id := range missing {
+		if c := byID[id]; c != nil {
+			entry := &reactCacheEntry{
+				reactions: make(map[string]int, len(c.Reactions)),
+				myReacts:  make(map[int64][]string),
+			}
+			for k, v := range c.Reactions {
+				entry.reactions[k] = v
+			}
+			s.reactCache.Store(id, entry)
 		}
 	}
 }
@@ -186,5 +242,6 @@ func (s *Store) ToggleReaction(userID, commentID int64, code string) (count int,
 	if err := tx.Commit(); err != nil {
 		return 0, false, err
 	}
+	s.reactCache.Delete(commentID)
 	return count, active, nil
 }
