@@ -2,13 +2,17 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/enekos/errolan/internal/models"
 )
 
 // attachReactions fills c.Reactions (code → count) for every comment in byID,
-// plus c.MyReacts for the viewer (if any), in at most two queries.
+// plus c.MyReacts for the viewer (if any). Uses GROUP_CONCAT to return one row
+// per comment instead of one row per reaction type, reducing Rows.Next overhead.
 func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64) {
 	if len(byID) == 0 {
 		return
@@ -17,7 +21,8 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	for id := range byID {
 		args = append(args, id)
 	}
-	q := "SELECT comment_id, code, count FROM reaction_counts WHERE comment_id IN (" + inPlaceholders(len(byID)) + ")"
+	q := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code || ':' || count, ',')
+		FROM reaction_counts WHERE comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(byID)))
 	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		return
@@ -25,14 +30,19 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	defer rows.Close()
 	for rows.Next() {
 		var cid int64
-		var code string
-		var count int
-		if err := rows.Scan(&cid, &code, &count); err == nil {
+		var raw string
+		if err := rows.Scan(&cid, &raw); err == nil {
 			if c, ok := byID[cid]; ok {
 				if c.Reactions == nil {
 					c.Reactions = make(map[string]int)
 				}
-				c.Reactions[code] = count
+				for _, part := range strings.Split(raw, ",") {
+					if kv := strings.SplitN(part, ":", 2); len(kv) == 2 {
+						if n, err := strconv.Atoi(kv[1]); err == nil {
+							c.Reactions[kv[0]] = n
+						}
+					}
+				}
 			}
 		}
 	}
@@ -40,7 +50,8 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		return
 	}
 	mArgs := append([]any{*viewerID}, args...)
-	mq := "SELECT comment_id, code FROM reactions WHERE user_id = ? AND comment_id IN (" + inPlaceholders(len(byID)) + ")"
+	mq := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code, ',')
+		FROM reactions WHERE user_id = ? AND comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(byID)))
 	mrows, err := s.DB.Query(mq, mArgs...)
 	if err != nil {
 		return
@@ -48,10 +59,14 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	defer mrows.Close()
 	for mrows.Next() {
 		var cid int64
-		var code string
-		if err := mrows.Scan(&cid, &code); err == nil {
+		var raw string
+		if err := mrows.Scan(&cid, &raw); err == nil {
 			if c, ok := byID[cid]; ok {
-				c.MyReacts = append(c.MyReacts, code)
+				for _, code := range strings.Split(raw, ",") {
+					if code != "" {
+						c.MyReacts = append(c.MyReacts, code)
+					}
+				}
 			}
 		}
 	}

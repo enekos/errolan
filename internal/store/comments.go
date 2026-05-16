@@ -14,17 +14,24 @@ const commentCols = `id, thread_id, parent_id, user_id, author_name, body, statu
 // comments table to others where a bare column name would be ambiguous.
 const commentColsPrefixed = `c.id, c.thread_id, c.parent_id, c.user_id, c.author_name, c.body, c.status, c.score, c.pinned, c.edit_count, c.anchor, c.moderation_reason, c.created_at, c.updated_at`
 
-func scanComment(row scanner) (*models.Comment, error) {
-	c := &models.Comment{}
+func scanCommentInto(c *models.Comment, row scanner) error {
 	var pinned int
 	if err := row.Scan(
 		&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
 		&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
 		&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
-		return nil, err
+		return err
 	}
 	c.Pinned = pinned != 0
+	return nil
+}
+
+func scanComment(row scanner) (*models.Comment, error) {
+	c := &models.Comment{}
+	if err := scanCommentInto(c, row); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -199,13 +206,15 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 	}
 	defer rows.Close()
 
-	var top []*models.Comment
+	topBuf := make([]models.Comment, opts.Limit+1)
+	top := make([]*models.Comment, 0, opts.Limit+1)
+	i := 0
 	for rows.Next() {
-		c, err := scanComment(rows)
-		if err != nil {
+		if err := scanCommentInto(&topBuf[i], rows); err != nil {
 			return nil, false, err
 		}
-		top = append(top, c)
+		top = append(top, &topBuf[i])
+		i++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
@@ -236,13 +245,29 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*models.Comment
+	est := len(byID) * 5
+	if est < 64 {
+		est = 64
+	}
+	replyBuf := make([]models.Comment, est)
+	out := make([]*models.Comment, 0, est)
+	i := 0
 	for rows.Next() {
-		c, err := scanComment(rows)
-		if err != nil {
-			return nil, err
+		var c *models.Comment
+		if i < len(replyBuf) {
+			c = &replyBuf[i]
+			if err := scanCommentInto(c, rows); err != nil {
+				return nil, err
+			}
+		} else {
+			var err error
+			c, err = scanComment(rows)
+			if err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, c)
+		i++
 	}
 	return out, rows.Err()
 }
