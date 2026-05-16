@@ -121,7 +121,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		s.reactMu.Lock()
 		for _, id := range missing {
 			if c := byID[id]; c != nil {
-				entry := &reactCacheEntry{
+				entry := reactCacheEntry{
 					reactions: make(map[string]int, len(c.Reactions)),
 					myReacts:  make(map[int64][]string),
 				}
@@ -160,7 +160,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	s.reactMu.Lock()
 	for _, id := range missing {
 		if c := byID[id]; c != nil {
-			entry := &reactCacheEntry{
+			entry := reactCacheEntry{
 				reactions: make(map[string]int, len(c.Reactions)),
 				myReacts:  make(map[int64][]string),
 			}
