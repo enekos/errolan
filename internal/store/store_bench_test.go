@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/enekos/errolan/internal/db"
@@ -145,19 +146,60 @@ func seedReactions(b *testing.B, conn *sql.DB, threadID int64, numUsers int) {
 		cids = append(cids, id)
 	}
 	rows.Close()
+
+	// Batch insert reactions
+	const batchSize = 200
+	reactionValues := make([]string, 0, batchSize)
+	reactionArgs := make([]any, 0, batchSize*4)
+	// Count reactions per (comment_id, code) in Go
+	counts := make(map[int64]map[string]int, len(cids))
 	for ui := 0; ui < numUsers; ui++ {
 		for _, cid := range cids {
 			code := codes[(ui+int(cid))%len(codes)]
-			_, err := tx.Exec(`INSERT INTO reactions (user_id, comment_id, code, created_at) VALUES (?, ?, ?, ?)`,
-				ui+1, cid, code, int64(ui)+cid)
-			if err != nil {
-				b.Fatal(err)
+			reactionValues = append(reactionValues, "(?,?,?,?)")
+			reactionArgs = append(reactionArgs, ui+1, cid, code, int64(ui)+cid)
+			if len(reactionValues) >= batchSize {
+				_, err := tx.Exec(`INSERT INTO reactions (user_id, comment_id, code, created_at) VALUES `+strings.Join(reactionValues, ","), reactionArgs...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				reactionValues = reactionValues[:0]
+				reactionArgs = reactionArgs[:0]
 			}
-			_, err = tx.Exec(`INSERT INTO reaction_counts (comment_id, code, count) VALUES (?, ?, 1)
-				ON CONFLICT(comment_id, code) DO UPDATE SET count = count + 1`, cid, code)
-			if err != nil {
-				b.Fatal(err)
+			if counts[cid] == nil {
+				counts[cid] = make(map[string]int)
 			}
+			counts[cid][code]++
+		}
+	}
+	if len(reactionValues) > 0 {
+		_, err := tx.Exec(`INSERT INTO reactions (user_id, comment_id, code, created_at) VALUES `+strings.Join(reactionValues, ","), reactionArgs...)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	// Batch insert final reaction_counts
+	countValues := make([]string, 0, batchSize)
+	countArgs := make([]any, 0, batchSize*3)
+	for cid, codeMap := range counts {
+		for code, cnt := range codeMap {
+			countValues = append(countValues, "(?,?,?)")
+			countArgs = append(countArgs, cid, code, cnt)
+			if len(countValues) >= batchSize {
+				_, err := tx.Exec(`INSERT INTO reaction_counts (comment_id, code, count) VALUES `+strings.Join(countValues, ","), countArgs...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				countValues = countValues[:0]
+				countArgs = countArgs[:0]
+			}
+		}
+	}
+	if len(countValues) > 0 {
+		_, err := tx.Exec(`INSERT INTO reaction_counts (comment_id, code, count) VALUES `+strings.Join(countValues, ","), countArgs...)
+		if err != nil {
+			b.Fatal(err)
 		}
 	}
 }
