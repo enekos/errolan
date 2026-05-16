@@ -50,12 +50,25 @@ func (s *Store) UserByEmail(email string) (*models.User, error) {
 }
 
 func (s *Store) UserByID(id int64) (*models.User, error) {
+	s.userMu.RLock()
+	if u, ok := s.userCache[id]; ok {
+		s.userMu.RUnlock()
+		return u, nil
+	}
+	s.userMu.RUnlock()
+
 	row := s.DB.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id)
 	u, err := scanUser(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
-	return u, err
+	if err != nil {
+		return nil, err
+	}
+	s.userMu.Lock()
+	s.userCache[id] = u
+	s.userMu.Unlock()
+	return u, nil
 }
 
 func (s *Store) ListUsers(limit, offset int) ([]*models.User, error) {
@@ -83,6 +96,11 @@ func (s *Store) ListUsers(limit, offset int) ([]*models.User, error) {
 
 func (s *Store) SetUserBanned(id int64, banned bool) error {
 	_, err := s.DB.Exec(`UPDATE users SET is_banned = ? WHERE id = ?`, boolInt(banned), id)
+	if err == nil {
+		s.userMu.Lock()
+		delete(s.userCache, id)
+		s.userMu.Unlock()
+	}
 	return err
 }
 

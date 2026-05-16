@@ -25,12 +25,20 @@ var placeholderCache sync.Map // int → "?,?,?"
 
 
 type Store struct {
-	DB        *sql.DB
-	emojiMu   sync.RWMutex
+	DB         *sql.DB
+	emojiMu    sync.RWMutex
 	emojiCache map[int64][]*models.Emoji
+	userMu     sync.RWMutex
+	userCache  map[int64]*models.User
 }
 
-func New(db *sql.DB) *Store { return &Store{DB: db, emojiCache: make(map[int64][]*models.Emoji)} }
+func New(db *sql.DB) *Store {
+	return &Store{
+		DB:         db,
+		emojiCache: make(map[int64][]*models.Emoji),
+		userCache:  make(map[int64]*models.User),
+	}
+}
 
 // newAPIKey returns a fresh "erl_…" site key. 24 random bytes = 192 bits of
 // entropy, hex-encoded so the result is safe in URLs and headers.
