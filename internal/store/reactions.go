@@ -45,6 +45,8 @@ func parseMyReacts(raw string, out []string) []string {
 // attachReactions fills c.Reactions (code → count) for every comment in byID,
 // plus c.MyReacts for the viewer (if any). Uses GROUP_CONCAT to return one row
 // per comment instead of one row per reaction type, reducing Rows.Next overhead.
+// When a viewer is present, a correlated subquery fetches the viewer's own
+// reactions in the same round-trip without a JOIN.
 func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64) {
 	if len(byID) == 0 {
 		return
@@ -53,6 +55,35 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 	for id := range byID {
 		args = append(args, id)
 	}
+
+	if viewerID != nil {
+		q := fmt.Sprintf(`SELECT rc.comment_id, GROUP_CONCAT(rc.code || ':' || rc.count, ','),
+			(SELECT GROUP_CONCAT(code, ',') FROM reactions WHERE user_id = ? AND comment_id = rc.comment_id)
+		FROM reaction_counts rc WHERE rc.comment_id IN (%s) GROUP BY rc.comment_id`, inPlaceholders(len(args)))
+		rows, err := s.DB.Query(q, append([]any{*viewerID}, args...)...)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int64
+			var reactionsRaw string
+			var myReactsRaw sql.NullString
+			if err := rows.Scan(&cid, &reactionsRaw, &myReactsRaw); err == nil {
+				if c, ok := byID[cid]; ok {
+					if c.Reactions == nil {
+						c.Reactions = make(map[string]int)
+					}
+					parseReactions(reactionsRaw, c.Reactions)
+					if myReactsRaw.Valid {
+						c.MyReacts = parseMyReacts(myReactsRaw.String, c.MyReacts)
+					}
+				}
+			}
+		}
+		return
+	}
+
 	q := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code || ':' || count, ',')
 		FROM reaction_counts WHERE comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(args)))
 	rows, err := s.DB.Query(q, args...)
@@ -69,26 +100,6 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 					c.Reactions = make(map[string]int)
 				}
 				parseReactions(raw, c.Reactions)
-			}
-		}
-	}
-	if viewerID == nil {
-		return
-	}
-	mArgs := append([]any{*viewerID}, args...)
-	mq := fmt.Sprintf(`SELECT comment_id, GROUP_CONCAT(code, ',')
-		FROM reactions WHERE user_id = ? AND comment_id IN (%s) GROUP BY comment_id`, inPlaceholders(len(args)))
-	mrows, err := s.DB.Query(mq, mArgs...)
-	if err != nil {
-		return
-	}
-	defer mrows.Close()
-	for mrows.Next() {
-		var cid int64
-		var raw string
-		if err := mrows.Scan(&cid, &raw); err == nil {
-			if c, ok := byID[cid]; ok {
-				c.MyReacts = parseMyReacts(raw, c.MyReacts)
 			}
 		}
 	}
