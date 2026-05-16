@@ -10,6 +10,38 @@ import (
 	"github.com/enekos/errolan/internal/models"
 )
 
+// parseReactions parses a GROUP_CONCAT result like "like:5,heart:3" into the
+// provided map without allocating intermediate slices.
+func parseReactions(raw string, m map[string]int) {
+	start := 0
+	for i := 0; i <= len(raw); i++ {
+		if i == len(raw) || raw[i] == ',' {
+			part := raw[start:i]
+			if j := strings.IndexByte(part, ':'); j != -1 {
+				if n, err := strconv.Atoi(part[j+1:]); err == nil {
+					m[part[:j]] = n
+				}
+			}
+			start = i + 1
+		}
+	}
+}
+
+// parseMyReacts parses a GROUP_CONCAT result like "like,heart" and appends
+// each non-empty code to out without allocating intermediate slices.
+func parseMyReacts(raw string, out []string) []string {
+	start := 0
+	for i := 0; i <= len(raw); i++ {
+		if i == len(raw) || raw[i] == ',' {
+			if code := raw[start:i]; code != "" {
+				out = append(out, code)
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
 // attachReactions fills c.Reactions (code → count) for every comment in byID,
 // plus c.MyReacts for the viewer (if any). Uses GROUP_CONCAT to return one row
 // per comment instead of one row per reaction type, reducing Rows.Next overhead.
@@ -36,13 +68,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 				if c.Reactions == nil {
 					c.Reactions = make(map[string]int)
 				}
-				for _, part := range strings.Split(raw, ",") {
-					if kv := strings.SplitN(part, ":", 2); len(kv) == 2 {
-						if n, err := strconv.Atoi(kv[1]); err == nil {
-							c.Reactions[kv[0]] = n
-						}
-					}
-				}
+				parseReactions(raw, c.Reactions)
 			}
 		}
 	}
@@ -62,11 +88,7 @@ func (s *Store) attachReactions(byID map[int64]*models.Comment, viewerID *int64)
 		var raw string
 		if err := mrows.Scan(&cid, &raw); err == nil {
 			if c, ok := byID[cid]; ok {
-				for _, code := range strings.Split(raw, ",") {
-					if code != "" {
-						c.MyReacts = append(c.MyReacts, code)
-					}
-				}
+				c.MyReacts = parseMyReacts(raw, c.MyReacts)
 			}
 		}
 	}

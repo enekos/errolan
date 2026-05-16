@@ -266,9 +266,6 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		args = append([]any{*viewerID}, args...)
 	}
 	placeholders := inPlaceholders(len(byID))
-	if viewerID != nil {
-		placeholders = inPlaceholders(len(byID))
-	}
 	q := fmt.Sprintf(`SELECT %s FROM comments c%s WHERE c.parent_id IN (%s)%s ORDER BY c.created_at ASC`,
 		cols, joins, placeholders, statusFilter)
 	rows, err := s.DB.Query(q, args...)
