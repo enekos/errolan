@@ -53,6 +53,7 @@ func (s *Store) ListFlagged(limit int) ([]*FlaggedComment, error) {
 		if err := rows.Scan(
 			&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
 			&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+			&c.RangeQuote, &c.RangePrefix, &c.RangeSuffix, &c.RangeStart, &c.RangeEnd,
 			&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &fc,
 		); err != nil {
 			return nil, err

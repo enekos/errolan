@@ -72,6 +72,8 @@ Air watches `cmd/` and `internal/`; it ignores `sdk/`, `design/`, and `tmp/`. SD
 | `ERROLAN_SDK_DIR` | `sdk` | Directory served at `/sdk/`; leave default to serve the bundled SDK |
 | `ERROLAN_TRUST_FORWARDED` | `false` | Set to `true` only behind a proxy that strips spoofed `X-Forwarded-For` headers |
 | `ERROLAN_WEBHOOK_URL` | *(unset)* | If set, receives POST JSON for `comment.created`, `comment.delete`, `comment.flag`, `user.ban`, `thread.lock` events |
+| `ERROLAN_PUBLIC_URL` | *(empty)* | Canonical public origin (`https://comments.example.com`). Used to build ActivityPub Actor IDs, Webfinger acct URIs, and the `Link: <…>; rel="webmention"` discovery header. Falls back to the request `Host` when empty. |
+| `ERROLAN_GITHUB_CLIENT_ID` / `ERROLAN_GITHUB_CLIENT_SECRET` | *(empty)* | Enables `POST /api/auth/oauth/github` once both are set. Adding another provider (GitLab, Google, …) is a one-line addition in `main.go` plus its implementation in `internal/oauth/`. |
 
 ## Create a site
 
@@ -131,6 +133,16 @@ The killer feature: mark each paragraph on your article with `data-errolan-ancho
 
 The anchor id should be **stable** — derive it from a paragraph slug, not a random number on each render. Replies to anchored comments automatically inherit the parent's anchor (so a side conversation stays pinned to the same paragraph). On screens narrower than 1100px the rail hides; the SDK still works in cadence-style as a fallback. Both directions live at `/sdk/demo.html`.
 
+#### Text-range marginalia (selection-anchored comments)
+
+Inside an anchored element, readers can also select a specific passage — the SDK
+surfaces a floating "+ Note this passage" button anchored to the selection.
+Submitting opens the side panel with the quoted passage pre-filled. The selected
+text is highlighted in-line; clicking a highlight scopes the panel to comments
+on that passage. Re-anchoring is fuzzy: even if the host edits surrounding text,
+Errolan finds the saved quote by first trying its original offset, then by
+matching `prefix + quote + suffix`, then by quote alone.
+
 ### Programmatic mount
 
 ```js
@@ -172,7 +184,7 @@ All site-scoped endpoints require the `X-Errolan-Site: erl_...` header. Authenti
 | -- | -- | -- |
 | `GET` | `/api/threads/{slug}?title=…&url=…&sort=best\|newest\|oldest&limit=50&before_id=N` | Auto-creates the thread; supports `If-None-Match` for 304s. Response includes the site's emoji pack. |
 | `GET` | `/api/threads/{slug}/events` | Server-Sent Events stream for live updates (`?site=…` accepted for `EventSource`) |
-| `POST` | `/api/threads/{slug}/comments` | `{body, parent_id?, author_name?, website?, anchor?}` — `website` is the honeypot; `anchor` is the paragraph id for marginalia mode |
+| `POST` | `/api/threads/{slug}/comments` | `{body, parent_id?, author_name?, website?, anchor?, range_quote?, range_prefix?, range_suffix?, range_start?, range_end?}` — `website` is the honeypot; `anchor` is the paragraph id for marginalia mode; the optional `range_*` fields pin the comment to a specific passage inside that anchor (W3C TextQuote+TextPosition selector style) |
 | `POST` | `/api/threads/{slug}/lock` | Admin only; `{locked: bool}` |
 | `PATCH` | `/api/comments/{id}` | Edit own (or admin) |
 | `DELETE` | `/api/comments/{id}` | Soft delete own (or admin) |
@@ -229,6 +241,48 @@ Policy fields (all optional, sensible defaults):
 | `auto_hide_flag_count` | int (`0` = off) | Auto-hide a visible comment once it has at least this many distinct flags |
 
 When the engine holds a comment, `POST /api/threads/{slug}/comments` returns `202 Accepted` with `{"status":"pending","reason":"…","comment":{…}}` and the comment does **not** appear in public listings. When it rejects, the response is `422 Unprocessable Entity` with `{"error":"comment rejected by moderation","reason":"…"}` and nothing is persisted. Admins always see pending comments in thread listings and can approve / reject from `/api/mod/queue`.
+
+### Federation (Webmentions + ActivityPub)
+
+Errolan can ingest cross-site references to your threads — W3C Webmentions from
+the IndieWeb and minimal ActivityPub `Create(Note)` replies from Mastodon/etc.
+Verified mentions are rendered inline in an "Elsewhere on the web" block.
+
+Discovery is automatic: every API response carries a `Link: <…>; rel="webmention"`
+header pointing at `POST /api/webmentions`. ActivityPub's Webfinger resolves
+`acct:<site-slug>@<host>` to the site's actor at `/ap/sites/{slug}`.
+
+| Method | Path | Notes |
+| -- | -- | -- |
+| `POST` | `/api/webmentions` | Public Webmention endpoint. Accepts form-urlencoded `source` + `target` (or JSON with the same keys). Returns `202` once enqueued; verification is async. |
+| `GET` | `/api/threads/{slug}/mentions` | Verified mentions for a thread |
+| `GET` | `/.well-known/webfinger` | Resolves `acct:<site-slug>@<host>` to the AP actor |
+| `GET` | `/ap/sites/{slug}` | ActivityPub actor JSON for a site |
+| `GET` | `/ap/sites/{slug}/outbox` | Empty `OrderedCollection` (outbound federation isn't on yet) |
+| `POST` | `/ap/sites/{slug}/inbox` | Accepts `Create(Note)` activities whose `inReplyTo` matches a thread URL |
+
+The verifier worker dials with SSRF protection (refuses RFC1918 / loopback /
+link-local IPs), caps fetches at 1 MB, and limits redirects.
+
+### OAuth login
+
+`POST /api/auth/oauth/{provider}` starts the redirect dance for any provider
+configured in `main.go`. The callback handler exchanges the code, links (or
+creates) the local user, and issues a JWT identical to the password flow.
+
+Built in:
+
+- GitHub — set `ERROLAN_GITHUB_CLIENT_ID` / `ERROLAN_GITHUB_CLIENT_SECRET`.
+
+Adding another provider is one file in `internal/oauth/` (implement
+`Provider`) and one line in `main.go`'s provider slice — nothing else changes.
+
+### Privacy (GDPR)
+
+| Method | Path | Notes |
+| -- | -- | -- |
+| `GET` | `/api/me/export` | Returns every record we hold for the authenticated user — profile, comments, reactions, mentions — as a single JSON download. |
+| `POST` | `/api/me/delete` | Soft-deletes the user: anonymises name + email, marks the account banned (no new logins), and replaces every comment body with `[deleted]`. The row is kept so reply threading doesn't break. |
 
 ### Security headers & rate limits
 

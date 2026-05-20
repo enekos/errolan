@@ -52,6 +52,11 @@ type Comment struct {
 	Score            int            `json:"score"`
 	EditCount        int            `json:"edit_count"`
 	Anchor           string         `json:"anchor,omitempty"`
+	RangeQuote       string         `json:"range_quote,omitempty"`
+	RangePrefix      string         `json:"range_prefix,omitempty"`
+	RangeSuffix      string         `json:"range_suffix,omitempty"`
+	RangeStart       int            `json:"range_start,omitempty"`
+	RangeEnd         int            `json:"range_end,omitempty"`
 	ModerationReason string         `json:"moderation_reason,omitempty"`
 	CreatedAt        int64          `json:"created_at"`
 	UpdatedAt        int64          `json:"updated_at"`
@@ -107,6 +112,57 @@ type BlocklistEntry struct {
 	Pattern   string `json:"pattern"`
 	Action    string `json:"action"` // hold | reject
 	CreatedAt int64  `json:"created_at"`
+}
+
+// Mention is an inbound federated reference to a thread — either a W3C
+// Webmention or a minimal ActivityPub Create(Note). Rendered alongside the
+// thread's native comments once verified.
+type Mention struct {
+	ID         int64  `json:"id"`
+	SiteID     int64  `json:"site_id"`
+	ThreadID   int64  `json:"thread_id"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
+	AuthorName string `json:"author_name,omitempty"`
+	AuthorURL  string `json:"author_url,omitempty"`
+	Snippet    string `json:"snippet,omitempty"`
+	Kind       string `json:"kind"`   // "webmention" | "activitypub"
+	Status     string `json:"status"` // "pending" | "verified" | "rejected"
+	Reason     string `json:"reason,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
+	VerifiedAt int64  `json:"verified_at,omitempty"`
+}
+
+const (
+	MentionKindWebmention   = "webmention"
+	MentionKindActivityPub  = "activitypub"
+	MentionStatusPending    = "pending"
+	MentionStatusVerified   = "verified"
+	MentionStatusRejected   = "rejected"
+)
+
+// OAuthIdentity links an external provider account to a local user. Created
+// on first OAuth login; consulted on every subsequent OAuth login to look up
+// the existing user. The pair (Provider, Subject) is globally unique.
+type OAuthIdentity struct {
+	ID        int64  `json:"id"`
+	UserID    int64  `json:"user_id"`
+	Provider  string `json:"provider"`
+	Subject   string `json:"subject"`
+	Email     string `json:"email,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// UserProfile is the editable public profile (bio, website, avatar override).
+// Distinct from the User record so OAuth-imported avatars and user-supplied
+// bios live in one place without bloating the hot users row.
+type UserProfile struct {
+	UserID    int64  `json:"user_id"`
+	Bio       string `json:"bio,omitempty"`
+	Website   string `json:"website,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
 }
 
 type AuditEntry struct {

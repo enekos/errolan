@@ -99,6 +99,29 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// webmentionAdvertise adds the Webmention HTTP Link header to every response
+// so senders can discover the endpoint without fetching an HTML page. This is
+// the spec-recommended discovery method and lets host pages skip the
+// <link rel="webmention"> tag if they prefer.
+func (s *Server) webmentionAdvertise(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := strings.TrimRight(s.PublicURL, "/")
+		if base == "" {
+			scheme := "https"
+			if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
+				scheme = "http"
+			}
+			host := r.Host
+			if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" && s.TrustForwarded {
+				host = fwd
+			}
+			base = scheme + "://" + host
+		}
+		w.Header().Add("Link", `<`+base+`/api/webmentions>; rel="webmention"`)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // limitBody wraps the request body in a MaxBytesReader. Streaming endpoints
 // (SSE) bypass this by being mounted before the middleware composition.
 func limitBody(next http.Handler) http.Handler {

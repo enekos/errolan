@@ -4,22 +4,28 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/enekos/errolan/internal/models"
 )
 
-const commentCols = `id, thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, moderation_reason, created_at, updated_at`
+var commentSlicePool = sync.Pool{
+	New: func() any { return make([]models.Comment, 0, 64) },
+}
+
+const commentCols = `id, thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, range_quote, range_prefix, range_suffix, range_start, range_end, moderation_reason, created_at, updated_at`
 
 // commentColsPrefixed is `c.id, c.thread_id, …` for queries that join the
 // comments table to others where a bare column name would be ambiguous.
-const commentColsPrefixed = `c.id, c.thread_id, c.parent_id, c.user_id, c.author_name, c.body, c.status, c.score, c.pinned, c.edit_count, c.anchor, c.moderation_reason, c.created_at, c.updated_at`
+const commentColsPrefixed = `c.id, c.thread_id, c.parent_id, c.user_id, c.author_name, c.body, c.status, c.score, c.pinned, c.edit_count, c.anchor, c.range_quote, c.range_prefix, c.range_suffix, c.range_start, c.range_end, c.moderation_reason, c.created_at, c.updated_at`
 
 func scanCommentInto(c *models.Comment, row scanner) error {
 	var pinned int
 	if err := row.Scan(
 		&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
 		&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+		&c.RangeQuote, &c.RangePrefix, &c.RangeSuffix, &c.RangeStart, &c.RangeEnd,
 		&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return err
@@ -33,6 +39,7 @@ func scanCommentWithVote(c *models.Comment, row scanner) error {
 	if err := row.Scan(
 		&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
 		&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+		&c.RangeQuote, &c.RangePrefix, &c.RangeSuffix, &c.RangeStart, &c.RangeEnd,
 		&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &c.MyVote,
 	); err != nil {
 		return err
@@ -77,10 +84,21 @@ type ListCommentsOpts struct {
 	IncludePending bool // admins see comments still waiting in the queue
 }
 
+// TextRange optionally carries a W3C-style text selector pinning the comment
+// to a specific passage inside the anchor element. All-zero / empty means the
+// comment is a plain paragraph-level (or thread-level) anchor like before.
+type TextRange struct {
+	Quote  string
+	Prefix string
+	Suffix string
+	Start  int
+	End    int
+}
+
 // CreateComment inserts a comment with the supplied moderation status. Pending
 // comments do NOT bump the denormalised thread counter — only public, visible
 // comments count toward what readers will eventually see.
-func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, authorName, body, email, anchor, status, modReason string) (*models.Comment, error) {
+func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, authorName, body, email, anchor, status, modReason string, rng TextRange) (*models.Comment, error) {
 	if status == "" {
 		status = models.CommentStatusVisible
 	}
@@ -92,9 +110,11 @@ func (s *Store) CreateComment(threadID int64, parentID *int64, userID *int64, au
 
 	now := time.Now().Unix()
 	res, err := tx.Exec(
-		`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, moderation_reason, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)`,
-		threadID, parentID, userID, authorName, body, status, anchor, modReason, now, now,
+		`INSERT INTO comments (thread_id, parent_id, user_id, author_name, body, status, score, pinned, edit_count, anchor, range_quote, range_prefix, range_suffix, range_start, range_end, moderation_reason, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadID, parentID, userID, authorName, body, status, anchor,
+		rng.Quote, rng.Prefix, rng.Suffix, rng.Start, rng.End,
+		modReason, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -227,16 +247,25 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 	}
 	defer rows.Close()
 
-	topBuf := make([]models.Comment, opts.Limit+1)
-	top := make([]*models.Comment, 0, opts.Limit+1)
+	need := opts.Limit + 1
+	topBufAny := commentSlicePool.Get()
+	topBuf := topBufAny.([]models.Comment)
+	if cap(topBuf) < need {
+		topBuf = make([]models.Comment, need)
+	} else {
+		topBuf = topBuf[:need]
+	}
+	top := make([]*models.Comment, 0, need)
 	i := 0
 	for rows.Next() {
 		var pinned int
 		if err := rows.Scan(
 			&topBuf[i].ID, &topBuf[i].ThreadID, &topBuf[i].ParentID, &topBuf[i].UserID, &topBuf[i].AuthorName, &topBuf[i].Body,
 			&topBuf[i].Status, &topBuf[i].Score, &pinned, &topBuf[i].EditCount, &topBuf[i].Anchor,
+			&topBuf[i].RangeQuote, &topBuf[i].RangePrefix, &topBuf[i].RangeSuffix, &topBuf[i].RangeStart, &topBuf[i].RangeEnd,
 			&topBuf[i].ModerationReason, &topBuf[i].CreatedAt, &topBuf[i].UpdatedAt, &topBuf[i].MyVote,
 		); err != nil {
+			commentSlicePool.Put(topBuf[:0])
 			return nil, false, err
 		}
 		topBuf[i].Pinned = pinned != 0
@@ -244,8 +273,10 @@ func (s *Store) listTopLevelComments(threadID int64, opts ListCommentsOpts) ([]*
 		i++
 	}
 	if err := rows.Err(); err != nil {
+		commentSlicePool.Put(topBuf[:0])
 		return nil, false, err
 	}
+	commentSlicePool.Put(topBuf[:0])
 	hasMore := false
 	if opts.Limit > 0 && len(top) > opts.Limit {
 		top = top[:opts.Limit]
@@ -288,7 +319,13 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 	if est < 64 {
 		est = 64
 	}
-	replyBuf := make([]models.Comment, est)
+	replyBufAny := commentSlicePool.Get()
+	replyBuf := replyBufAny.([]models.Comment)
+	if cap(replyBuf) < est {
+		replyBuf = make([]models.Comment, est)
+	} else {
+		replyBuf = replyBuf[:est]
+	}
 	out := make([]*models.Comment, 0, est)
 	i := 0
 	for rows.Next() {
@@ -302,14 +339,17 @@ func (s *Store) listRepliesFor(byID map[int64]*models.Comment, includePending bo
 		if err := rows.Scan(
 			&c.ID, &c.ThreadID, &c.ParentID, &c.UserID, &c.AuthorName, &c.Body,
 			&c.Status, &c.Score, &pinned, &c.EditCount, &c.Anchor,
+			&c.RangeQuote, &c.RangePrefix, &c.RangeSuffix, &c.RangeStart, &c.RangeEnd,
 			&c.ModerationReason, &c.CreatedAt, &c.UpdatedAt, &c.MyVote,
 		); err != nil {
+			commentSlicePool.Put(replyBuf[:0])
 			return nil, err
 		}
 		c.Pinned = pinned != 0
 		out = append(out, c)
 		i++
 	}
+	commentSlicePool.Put(replyBuf[:0])
 	return out, rows.Err()
 }
 

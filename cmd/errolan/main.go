@@ -14,6 +14,7 @@ import (
 	"github.com/enekos/errolan/internal/auth"
 	"github.com/enekos/errolan/internal/config"
 	"github.com/enekos/errolan/internal/db"
+	"github.com/enekos/errolan/internal/oauth"
 	"github.com/enekos/errolan/internal/store"
 )
 
@@ -55,13 +56,24 @@ func main() {
 			"dir", cfg.SDKDir, "hint", "set ERROLAN_SDK_DIR or place files at ./sdk")
 	}
 
+	// Build the OAuth provider list. Each provider's constructor returns nil
+	// when its credentials are unset, so the slice stays clean. Adding a new
+	// provider (gitlab, google, …) is one line here plus its implementation
+	// in internal/oauth.
+	oauthProviders := []api.OAuthProvider{
+		oauth.NewGitHub(cfg.GitHubClientID, cfg.GitHubClientSecret),
+	}
+
 	srv := api.NewServer(st, authSvc, api.ServerOptions{
 		AdminCORS:      cfg.AdminCORS,
 		SDKDir:         sdkDir,
 		TrustForwarded: cfg.TrustForwarded,
 		WebhookURL:     cfg.WebhookURL,
+		PublicURL:      cfg.PublicURL,
+		OAuthProviders: oauthProviders,
 		Logger:         logger,
 	})
+	defer srv.Verifier.Stop()
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

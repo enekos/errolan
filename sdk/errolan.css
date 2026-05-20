@@ -134,6 +134,55 @@
 .erl-primary:disabled { opacity: .5; cursor: default; }
 .erl-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 
+/* "Delete my account" — distinct from .erl-primary so it never gets mis-clicked. */
+.erl-danger {
+  font-family: var(--erl-mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--erl-accent);
+  border: 1px solid var(--erl-accent);
+  cursor: pointer;
+  border-radius: 0;
+}
+.erl-danger:hover { background: var(--erl-accent); color: var(--erl-paper); }
+
+/* OAuth button row inside the auth dialog. Provider-agnostic styling: each
+   button's per-provider class (.erl-oauth-github, .erl-oauth-gitlab, …) is
+   available for hosts that want to tint specific providers — we keep the
+   default mono palette so unknown providers look right out of the box. */
+.erl-oauth-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 14px;
+}
+.erl-oauth-btn {
+  display: block;
+  text-align: center;
+  font-family: var(--erl-mono);
+  font-size: 12px;
+  letter-spacing: .08em;
+  padding: 10px 14px;
+  border: 1px solid var(--erl-ink);
+  color: var(--erl-ink);
+  text-decoration: none;
+  background: var(--erl-paper);
+  transition: background .15s;
+}
+.erl-oauth-btn:hover { background: var(--erl-ink); color: var(--erl-paper); }
+.erl-oauth-sep {
+  text-align: center;
+  font-family: var(--erl-mono);
+  font-size: 10px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--erl-mute);
+  margin: 10px 0 12px;
+}
+
 .erl-error { color: var(--erl-accent); font-size: 12px; min-height: 14px; }
 .erl-muted { color: var(--erl-mute); font-style: italic; padding: 8px 0; }
 .erl-loading { color: var(--erl-mute); padding: 14px 0; font-style: italic; }
@@ -456,6 +505,63 @@
   transition: background .15s;
 }
 
+/* ---------- Text-range marginalia ---------- */
+
+/* In-line highlight of a passage that has at least one comment. Underlined
+   rather than block-filled so coexisting paragraph-level highlights still read.
+   Cursor cue tells the reader the passage is clickable. */
+mark.erl-range {
+  background: linear-gradient(transparent 60%, var(--erl-highlight-soft, #FFF6CD) 60%);
+  color: inherit;
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 1px;
+  transition: background-color .15s;
+}
+mark.erl-range:hover {
+  background: linear-gradient(transparent 0%, var(--erl-highlight-soft, #FFF6CD) 0%);
+}
+
+/* Floating "+ Note this passage" button anchored to the current selection. */
+.erl-select-popover {
+  font-family: var(--erl-mono);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  background: var(--erl-ink);
+  color: var(--erl-paper);
+  border: 0;
+  padding: 6px 10px;
+  cursor: pointer;
+  z-index: 10001;
+  box-shadow: 0 4px 16px rgba(20,15,5,.32);
+  white-space: nowrap;
+}
+.erl-select-popover:hover { background: var(--erl-accent); }
+
+/* Side-panel grouping when comments are clustered by quoted passage. */
+.erl-passage-head {
+  margin: 18px 0 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.erl-passage-label {
+  font-family: var(--erl-mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--erl-mute);
+  padding-top: 6px;
+  flex: 0 0 auto;
+}
+.erl-quoted-small {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  flex: 1 1 auto;
+}
+
 /* ---------- Side panel ---------- */
 
 .erl-panel-overlay {
@@ -521,3 +627,62 @@
 .erl-footer a:hover { color: var(--erl-accent); }
 
 .erl-more { text-align: center; padding: 18px 0; }
+
+/* ---------- Federated mentions (webmention + activitypub) ---------- */
+
+.erl-mentions {
+  margin: 32px 0 28px;
+  padding: 18px 20px;
+  background: var(--erl-paper-2);
+  border-left: 2px solid var(--erl-mute-2);
+}
+.erl-mentions-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.erl-mention {
+  padding: 12px 0;
+  border-top: 1px solid var(--erl-rule-soft);
+}
+.erl-mention:first-child { border-top: 0; padding-top: 4px; }
+.erl-mention-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+.erl-mention-author {
+  color: var(--erl-ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+.erl-mention-author:hover { color: var(--erl-accent); text-decoration: underline; }
+.erl-mention-source {
+  font-family: var(--erl-mono);
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--erl-mute);
+  text-decoration: none;
+  margin-left: auto;
+}
+.erl-mention-source:hover { color: var(--erl-accent); }
+.erl-mention-kind {
+  font-family: var(--erl-mono);
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid var(--erl-rule);
+  color: var(--erl-mute);
+}
+.erl-mention-kind-activitypub {
+  border-color: var(--erl-accent);
+  color: var(--erl-accent);
+}
+.erl-mention-snippet {
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--erl-rule);
+  font-style: italic;
+  color: var(--erl-mute);
+  font-size: 14px;
+  line-height: 1.5;
+}

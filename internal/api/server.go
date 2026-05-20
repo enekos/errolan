@@ -8,6 +8,7 @@ import (
 
 	"github.com/enekos/errolan/internal/auth"
 	"github.com/enekos/errolan/internal/cache"
+	"github.com/enekos/errolan/internal/federation"
 	"github.com/enekos/errolan/internal/hub"
 	"github.com/enekos/errolan/internal/lockout"
 	"github.com/enekos/errolan/internal/ratelimit"
@@ -25,6 +26,19 @@ type Server struct {
 	Webhook   *webhook.Notifier
 	AdminCORS string
 	SDKDir    string
+
+	// PublicURL is the canonical origin (e.g. "https://comments.example.com")
+	// the server uses to build Actor IDs and Webfinger acct URIs. Optional —
+	// when empty, federation falls back to the request's Host header.
+	PublicURL string
+
+	// OAuth contains every configured identity provider keyed by short name
+	// ("github", "gitlab", "google", …). Empty map means OAuth is disabled.
+	OAuth *oauthRegistry
+
+	// Verifier is the inbound-mention background worker. nil when federation
+	// is disabled (no public URL configured).
+	Verifier *federation.Verifier
 
 	// TrustForwarded says X-Forwarded-For / X-Real-IP may be trusted (i.e. we
 	// know we're behind a reverse proxy). Off by default — only enable when
@@ -48,7 +62,15 @@ type ServerOptions struct {
 	SDKDir         string
 	TrustForwarded bool
 	WebhookURL     string
-	Logger         *slog.Logger
+	PublicURL      string
+
+	// OAuthProviders is a slice of pre-built OAuth providers (build them in
+	// main.go from config) keyed by their short name. Pass nil to disable
+	// OAuth. The server doesn't know or care which providers are present —
+	// every route is dispatched generically by name.
+	OAuthProviders []OAuthProvider
+
+	Logger *slog.Logger
 }
 
 func NewServer(st *store.Store, a *auth.Service, opts ServerOptions) *Server {
@@ -58,6 +80,12 @@ func NewServer(st *store.Store, a *auth.Service, opts ServerOptions) *Server {
 	if opts.AdminCORS == "" {
 		opts.AdminCORS = "*"
 	}
+	verifier := federation.New(st, opts.Logger)
+	hub := hub.New()
+	verifier.OnVerified = func(threadID int64) {
+		hub.Publish(threadID, "mention")
+	}
+	verifier.Start()
 	return &Server{
 		Store:          st,
 		Auth:           a,
@@ -65,13 +93,16 @@ func NewServer(st *store.Store, a *auth.Service, opts ServerOptions) *Server {
 		Webhook:        webhook.New(opts.WebhookURL, opts.Logger),
 		AdminCORS:      opts.AdminCORS,
 		SDKDir:         opts.SDKDir,
+		PublicURL:      opts.PublicURL,
+		OAuth:          newOAuthRegistry(opts.OAuthProviders),
+		Verifier:       verifier,
 		TrustForwarded: opts.TrustForwarded,
 		SiteCache:      cache.New(256, 60*time.Second),
 		GlobalLimiter:  ratelimit.New(20, 60),  // 20 req/s, burst 60
 		AuthLimiter:    ratelimit.New(0.2, 5),  // 1 every 5s, burst 5
 		WriteLimiter:   ratelimit.New(0.5, 10), // 1 every 2s, burst 10
 		Lockout:        lockout.New(5, 15*time.Minute, 15*time.Minute),
-		Hub:            hub.New(),
+		Hub:            hub,
 	}
 }
 
@@ -92,11 +123,13 @@ func (s *Server) Handler() http.Handler {
 	return s.cors(
 		recoverer(s.Logger)(
 			securityHeaders(
-				compress(
-					s.realIP(
-						s.rateLimit(
-							limitBody(
-								s.resolveSite(s.resolveUser(mux)),
+				s.webmentionAdvertise(
+					compress(
+						s.realIP(
+							s.rateLimit(
+								limitBody(
+									s.resolveSite(s.resolveUser(mux)),
+								),
 							),
 						),
 					),
@@ -156,6 +189,27 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/mod/queue", s.handleModQueue)
 	mux.HandleFunc("POST /api/comments/{id}/approve", s.handleApproveComment)
 	mux.HandleFunc("POST /api/comments/{id}/reject", s.handleRejectComment)
+
+	// Federation: Webmentions in, ActivityPub in.
+	mux.HandleFunc("POST /api/webmentions", s.handleWebmention)
+	mux.HandleFunc("GET /api/threads/{slug}/mentions", s.handleListThreadMentions)
+	mux.HandleFunc("GET /.well-known/webfinger", s.handleWebfinger)
+	mux.HandleFunc("GET /ap/sites/{slug}", s.handleAPActor)
+	mux.HandleFunc("GET /ap/sites/{slug}/outbox", s.handleAPOutbox)
+	mux.HandleFunc("POST /ap/sites/{slug}/inbox", s.handleAPInbox)
+
+	// OAuth login — provider-agnostic; dispatched by short name.
+	mux.HandleFunc("GET /api/auth/oauth", s.handleListOAuthProviders)
+	mux.HandleFunc("GET /api/auth/oauth/{provider}", s.handleOAuthStart)
+	mux.HandleFunc("GET /api/auth/oauth/{provider}/callback", s.handleOAuthCallback)
+
+	// Public reader profile + profile edit.
+	mux.HandleFunc("GET /api/users/{id}/profile", s.handleGetProfile)
+	mux.HandleFunc("PATCH /api/me/profile", s.handleUpdateMyProfile)
+
+	// GDPR — export and self-delete.
+	mux.HandleFunc("GET /api/me/export", s.handleExportMe)
+	mux.HandleFunc("POST /api/me/delete", s.handleDeleteMe)
 
 	// SDK static
 	if s.SDKDir != "" {

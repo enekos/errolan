@@ -160,6 +160,201 @@
   }
 
   // =========================================================================
+  // Text-range selection helpers.
+  //
+  // Captures a user-selected passage inside an anchor element as a W3C-style
+  // selector — a TextQuoteSelector (prefix/quote/suffix) plus a best-effort
+  // TextPositionSelector (start/end offsets in the anchor's textContent).
+  //
+  // Re-anchoring lives here too: given the original quote/prefix/suffix and an
+  // anchor element whose text may have shifted, return the current substring
+  // bounds — first by exact match at the saved offset, then by exact match
+  // anywhere, then by prefix+suffix-anchored search.
+  // =========================================================================
+
+  // RANGE_CTX is the prefix/suffix size we keep alongside the quote. 32 chars
+  // is the W3C Web Annotation default; long enough to disambiguate, short
+  // enough that a small edit elsewhere doesn't break re-anchoring.
+  const RANGE_CTX = 32;
+
+  // captureSelectionRange inspects the current document selection. If the
+  // selection lives entirely inside an anchor element (or any of its
+  // descendants), returns the descriptor we'll send to the API; otherwise null.
+  function captureSelectionRange(articleEl, anchorSelector) {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const text = sel.toString();
+    if (!text || text.trim().length < 2) return null;
+
+    const range  = sel.getRangeAt(0);
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === 3 /* text */) node = node.parentElement;
+    if (!articleEl || !articleEl.contains(node)) return null;
+
+    let anchorEl = node.closest && node.closest(anchorSelector);
+    if (!anchorEl) return null;
+
+    // Compute start offset within the anchor's plain text by walking text
+    // nodes in DOM order until we hit the selection's start container.
+    const offsets = textOffsetsFor(anchorEl, range);
+    if (!offsets) return null;
+
+    const full = anchorEl.textContent || "";
+    const start = offsets.start, end = offsets.end;
+    const quote = full.slice(start, end);
+    if (!quote.trim()) return null;
+
+    const prefix = full.slice(Math.max(0, start - RANGE_CTX), start);
+    const suffix = full.slice(end, Math.min(full.length, end + RANGE_CTX));
+
+    const anchorID = anchorEl.getAttribute("data-errolan-anchor") || anchorEl.id || "";
+    if (!anchorID) return null;
+    return {
+      anchor: anchorID, anchorEl,
+      quote, prefix, suffix, start, end,
+      rect: range.getBoundingClientRect(),
+    };
+  }
+
+  // textOffsetsFor returns {start, end} for the selection range expressed as
+  // character offsets into anchorEl.textContent. Walks text nodes left-to-right.
+  function textOffsetsFor(anchorEl, range) {
+    const walker = document.createTreeWalker(anchorEl, NodeFilter.SHOW_TEXT);
+    let acc = 0, start = -1, end = -1;
+    let n;
+    while ((n = walker.nextNode())) {
+      const len = n.nodeValue.length;
+      if (n === range.startContainer) start = acc + range.startOffset;
+      if (n === range.endContainer)   end   = acc + range.endOffset;
+      acc += len;
+      if (start >= 0 && end >= 0) break;
+    }
+    // Fallback when start/end containers aren't text nodes (selection at the
+    // boundary of an element). Take whichever offsets we collected; if either
+    // is missing, give up so we don't ship a half-valid descriptor.
+    if (start < 0 || end < 0 || end < start) return null;
+    return { start, end };
+  }
+
+  // findQuoteRange locates the comment's saved quote inside anchorEl.textContent
+  // and returns DOM Range or null. Strategy:
+  //   1. Try the saved start..end window — fastest, exact when host hasn't edited.
+  //   2. Look for `prefix + quote + suffix` (most disambiguating).
+  //   3. Look for `quote` alone — first occurrence wins.
+  // The returned Range can be passed to surroundContents/extractContents.
+  function findQuoteRange(anchorEl, descriptor) {
+    if (!anchorEl || !descriptor || !descriptor.quote) return null;
+    const text = anchorEl.textContent || "";
+    const q    = descriptor.quote;
+    const p    = descriptor.prefix || "";
+    const s    = descriptor.suffix || "";
+
+    let start = -1, end = -1;
+    if (typeof descriptor.start === "number" &&
+        text.slice(descriptor.start, descriptor.start + q.length) === q) {
+      start = descriptor.start;
+      end   = start + q.length;
+    }
+    if (start < 0 && (p || s)) {
+      const idx = text.indexOf(p + q + s);
+      if (idx >= 0) { start = idx + p.length; end = start + q.length; }
+    }
+    if (start < 0) {
+      const idx = text.indexOf(q);
+      if (idx >= 0) { start = idx; end = idx + q.length; }
+    }
+    if (start < 0) return null;
+    return rangeFromOffsets(anchorEl, start, end);
+  }
+
+  // rangeFromOffsets builds a DOM Range out of character offsets into the
+  // anchor element's textContent, even when those offsets span multiple text
+  // nodes (e.g. <p>foo <em>bar</em> baz</p>).
+  function rangeFromOffsets(anchorEl, start, end) {
+    const walker = document.createTreeWalker(anchorEl, NodeFilter.SHOW_TEXT);
+    let acc = 0, startNode = null, startOff = 0, endNode = null, endOff = 0;
+    let n;
+    while ((n = walker.nextNode())) {
+      const len = n.nodeValue.length;
+      const next = acc + len;
+      if (startNode === null && next >= start) {
+        startNode = n; startOff = start - acc;
+      }
+      if (next >= end) { endNode = n; endOff = end - acc; break; }
+      acc = next;
+    }
+    if (!startNode || !endNode) return null;
+    const r = document.createRange();
+    try {
+      r.setStart(startNode, startOff);
+      r.setEnd(endNode, endOff);
+    } catch (_) { return null; }
+    return r;
+  }
+
+  // highlightDescriptors paints `<mark class="erl-range">` around every range
+  // referenced by `descriptors`. Returns the inserted nodes so the caller can
+  // remove them on teardown.
+  function highlightDescriptors(articleEl, descriptors) {
+    const out = [];
+    descriptors.forEach(desc => {
+      const anchorEl = articleEl.querySelector(
+        '[data-errolan-anchor="' + cssEscape(desc.anchor) + '"]');
+      if (!anchorEl) return;
+      const range = findQuoteRange(anchorEl, desc);
+      if (!range) return;
+      try {
+        const mark = document.createElement("mark");
+        mark.className = "erl-range";
+        mark.setAttribute("data-anchor", desc.anchor);
+        if (desc.id) mark.setAttribute("data-comment-id", desc.id);
+        // surroundContents fails on partial-node ranges; extract+insert is the
+        // robust path.
+        const frag = range.extractContents();
+        mark.appendChild(frag);
+        range.insertNode(mark);
+        out.push(mark);
+      } catch (_) { /* ranged comments are best-effort */ }
+    });
+    return out;
+  }
+
+  function unhighlight(nodes) {
+    nodes.forEach(m => {
+      const parent = m.parentNode;
+      if (!parent) return;
+      while (m.firstChild) parent.insertBefore(m.firstChild, m);
+      parent.removeChild(m);
+      parent.normalize && parent.normalize();
+    });
+  }
+
+  // groupByRange splits a list of comments sharing the same anchor into groups
+  // keyed by their range_quote. Comments without a range fall in the leading
+  // "paragraph-level" group. When focusKey is set, only the matching group is
+  // returned — used when the user clicks a highlighted passage.
+  function groupByRange(comments, focusKey) {
+    const map = new Map();
+    const order = [];
+    const keyOf = (c) => c.range_quote ? ("q:" + c.range_quote) : "";
+    comments.forEach(c => {
+      const k = keyOf(c);
+      if (!map.has(k)) { map.set(k, []); order.push(k); }
+      map.get(k).push(c);
+    });
+    let groups = order.map(k => ({
+      key:    k,
+      quote:  k.startsWith("q:") ? k.slice(2) : "",
+      comments: map.get(k),
+    }));
+    if (focusKey) {
+      const only = groups.find(g => g.key === focusKey);
+      if (only) groups = [only];
+    }
+    return groups;
+  }
+
+  // =========================================================================
   // Format helpers (pure)
   // =========================================================================
 
@@ -181,6 +376,15 @@
       return `<img class="erl-emoji" src="${escapeHTML(emoji.svg)}" alt=":${escapeHTML(emoji.code)}:" width="${s}" height="${s}">`;
     }
     return `<span class="erl-emoji" style="width:${s}px;height:${s}px;" title=":${escapeHTML(emoji.code)}:">${emoji.svg}</span>`;
+  }
+
+  // shortHost extracts the host portion of a URL for the "from someothersite.com"
+  // chip on mention rows. Falls back to the original string on parse failure.
+  function shortHost(rawurl) {
+    try {
+      const u = new URL(rawurl);
+      return u.host.replace(/^www\./, "");
+    } catch (_) { return rawurl; }
   }
 
   function relTime(unixSec) {
@@ -246,11 +450,19 @@
         undefined, ifNoneMatch ? { "If-None-Match": ifNoneMatch } : null);
     }
 
-    postComment(slug, body, parentID, authorName, anchor) {
-      return this.request("POST", "/api/threads/" + encodeURIComponent(slug) + "/comments", {
+    postComment(slug, body, parentID, authorName, anchor, range) {
+      const payload = {
         body, parent_id: parentID || null, author_name: authorName || "",
         website: "", anchor: anchor || "",
-      });
+      };
+      if (range && range.quote) {
+        payload.range_quote  = range.quote;
+        payload.range_prefix = range.prefix || "";
+        payload.range_suffix = range.suffix || "";
+        payload.range_start  = range.start | 0;
+        payload.range_end    = range.end   | 0;
+      }
+      return this.request("POST", "/api/threads/" + encodeURIComponent(slug) + "/comments", payload);
     }
 
     editComment(id, body)   { return this.request("PATCH",  "/api/comments/" + id, { body }); }
@@ -260,6 +472,30 @@
     pin(id, pinned)         { return this.request("POST",   "/api/comments/" + id + "/pin", { pinned: !!pinned }); }
     login(email, pw)        { return this.request("POST",   "/api/auth/login", { email, password: pw }); }
     register(email, n, pw)  { return this.request("POST",   "/api/auth/register", { email, name: n, password: pw }); }
+
+    // OAuth: returns the list of configured providers so the auth dialog can
+    // render a row of "Sign in with X" buttons next to the email/password
+    // form. The SDK never special-cases provider names — it just renders
+    // whatever the server advertises.
+    listOAuthProviders() { return this.request("GET", "/api/auth/oauth"); }
+
+    // oauthRedirectURL builds the absolute provider-redirect URL. Callers
+    // navigate the browser to this rather than fetching it, because the next
+    // hop is a 302 to the provider's own authorize page.
+    oauthRedirectURL(provider, returnTo) {
+      const r = encodeURIComponent(returnTo || location.href);
+      return this.api + "/api/auth/oauth/" + encodeURIComponent(provider) + "?redirect=" + r;
+    }
+
+    // GDPR: small wrappers so handlers can stay in one place.
+    exportMyData() {
+      return fetch(this.api + "/api/me/export", {
+        headers: { "X-Errolan-Site": this.site, "Authorization": "Bearer " + this.token() },
+      }).then(r => r.blob());
+    }
+    deleteMyAccount() {
+      return this.request("POST", "/api/me/delete", { confirm: true });
+    }
   }
 
   // =========================================================================
@@ -342,6 +578,24 @@
     overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
 
     dialog.appendChild(el("h4", { text: mode === "login" ? "Sign in" : "Create an account" }));
+
+    // OAuth options first — easier to click than typing credentials. We fetch
+    // the list lazily; an unconfigured instance returns [] and we just don't
+    // render the row.
+    const oauthRow = el("div", { class: "erl-oauth-row" });
+    dialog.appendChild(oauthRow);
+    widget.client.listOAuthProviders().then(providers => {
+      if (!providers || providers.length === 0) return;
+      providers.forEach(p => {
+        oauthRow.appendChild(el("a", {
+          class: "erl-oauth-btn erl-oauth-" + p.name,
+          href: widget.client.oauthRedirectURL(p.name),
+          text: "Continue with " + p.label,
+        }));
+      });
+      dialog.insertBefore(el("div", { class: "erl-oauth-sep", text: "or" }), oauthRow.nextSibling);
+    }).catch(() => { /* unconfigured — silent */ });
+
     dialog.appendChild(email);
     if (name) dialog.appendChild(name);
     dialog.appendChild(pw);
@@ -351,6 +605,62 @@
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     email.focus();
+  }
+
+  // =========================================================================
+  // MyDataDialog: GDPR controls — export + self-delete. Keeps the SDK honest
+  // about what it knows about the reader; the export is a JSON dump, the
+  // delete is a one-way anonymisation that requires explicit confirmation.
+  // =========================================================================
+
+  function openMyDataDialog(widget) {
+    const overlay = el("div", { class: "erl-overlay" });
+    const dialog  = el("div", { class: "erl-dialog" });
+    const close   = () => removeNode(overlay);
+
+    dialog.appendChild(el("h4", { text: "Your data" }));
+    dialog.appendChild(el("p", { class: "erl-muted",
+      text: "Errolan stores your profile, every comment you wrote, and every reaction you placed. You can download all of it, or delete your account. Deletions are permanent and anonymise your comments to keep replies threaded." }));
+
+    const errBox = el("div", { class: "erl-error" });
+
+    const exportBtn = el("button", {
+      class: "erl-primary", text: "Download my data (JSON)",
+      onClick: async () => {
+        errBox.textContent = "";
+        try {
+          const blob = await widget.client.exportMyData();
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "errolan-export.json";
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        } catch (e) { errBox.textContent = e.message; }
+      },
+    });
+    const deleteBtn = el("button", {
+      class: "erl-danger", text: "Delete my account permanently",
+      onClick: async () => {
+        if (!confirm("This will anonymise your account and replace every comment body with [deleted]. Proceed?")) return;
+        errBox.textContent = "";
+        try {
+          await widget.client.deleteMyAccount();
+          widget.client.setToken("");
+          widget.etag = null;
+          await widget.refresh();
+          close();
+        } catch (e) { errBox.textContent = e.message; }
+      },
+    });
+
+    dialog.appendChild(el("div", { class: "erl-actions" }, [exportBtn]));
+    dialog.appendChild(el("div", { class: "erl-actions" }, [deleteBtn]));
+    dialog.appendChild(errBox);
+    dialog.appendChild(el("button", { class: "erl-link", text: "close", onClick: close }));
+
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
   }
 
   // =========================================================================
@@ -392,7 +702,7 @@
   // Composer: factory that returns a <form> element ready to insert
   // =========================================================================
 
-  function renderComposer(widget, parentID, anchor) {
+  function renderComposer(widget, parentID, anchor, range) {
     const wrap = el("form", { class: "erl-composer" });
     const requireAuth = widget.state.site && widget.state.site.require_auth;
     if (requireAuth && !widget.viewer) {
@@ -400,7 +710,11 @@
       return wrap;
     }
 
-    if (anchor) {
+    if (range && range.quote) {
+      const shortQ = range.quote.length > 140 ? range.quote.slice(0, 140) + "…" : range.quote;
+      wrap.appendChild(el("div", { class: "erl-eyebrow", text: "Note on the selection" }));
+      wrap.appendChild(el("blockquote", { class: "erl-quoted erl-quoted-small", text: shortQ }));
+    } else if (anchor) {
       wrap.appendChild(el("div", { class: "erl-eyebrow", text: "Add a note to paragraph " + anchor }));
     }
 
@@ -466,14 +780,15 @@
       if (nameInput && an) localStorage.setItem(NAME_KEY, an);
       submit.disabled = true;
       try {
-        await widget.client.postComment(widget.opts.thread, body, parentID, an, anchor);
+        await widget.client.postComment(widget.opts.thread, body, parentID, an, anchor, range);
         widget.replyTo = null;
+        widget.pendingRange = null;
         widget.etag = null;
         await widget.refresh();
         if (widget.activeAnchor && widget.mode === "marginalia") {
           const elNode = widget.articleEl.querySelector(
             '[data-errolan-anchor="' + cssEscape(widget.activeAnchor) + '"]');
-          widget.openParagraphPanel(widget.activeAnchor, elNode);
+          widget.openParagraphPanel(widget.activeAnchor, elNode, widget.activeRangeKey);
         }
       } catch (e) { errBox.textContent = e.message; }
       finally { submit.disabled = false; }
@@ -825,6 +1140,67 @@
   }
 
   // =========================================================================
+  // SelectionPopover: floating "+ Note this passage" button anchored to the
+  // current selection. Lives only in marginalia mode and only while an article
+  // element is on screen.
+  // =========================================================================
+
+  class SelectionPopover {
+    constructor(widget) {
+      this.widget   = widget;
+      this.node     = null;
+      this._onUp    = () => this.maybeShow();
+      this._onDown  = (ev) => { if (this.node && !this.node.contains(ev.target)) this.hide(); };
+      this._onScroll = () => this.hide();
+    }
+    attach() {
+      document.addEventListener("mouseup",   this._onUp);
+      document.addEventListener("keyup",     this._onUp);
+      document.addEventListener("mousedown", this._onDown, true);
+      window.addEventListener("scroll",      this._onScroll, true);
+    }
+    detach() {
+      document.removeEventListener("mouseup",   this._onUp);
+      document.removeEventListener("keyup",     this._onUp);
+      document.removeEventListener("mousedown", this._onDown, true);
+      window.removeEventListener("scroll",      this._onScroll, true);
+      this.hide();
+    }
+    maybeShow() {
+      if (!this.widget.articleEl) return;
+      // Don't fight with the side panel or auth dialog — only capture article
+      // selections while the reader is in the article.
+      if (this.widget.panel) return;
+      const range = captureSelectionRange(this.widget.articleEl, this.widget.anchorSelector);
+      if (!range) { this.hide(); return; }
+      this.show(range);
+    }
+    show(range) {
+      this.hide();
+      const btn = el("button", {
+        type: "button", class: "erl-select-popover",
+        text: "+ Note this passage",
+        onClick: (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.widget.openSelectionNote(range);
+          this.hide();
+        },
+      });
+      // Position above the selection rect.
+      btn.style.position = "absolute";
+      btn.style.top  = (range.rect.top   + window.scrollY - 36) + "px";
+      btn.style.left = (range.rect.left  + window.scrollX) + "px";
+      document.body.appendChild(btn);
+      this.node = btn;
+    }
+    hide() {
+      removeNode(this.node);
+      this.node = null;
+    }
+  }
+
+  // =========================================================================
   // Widget — top-level orchestrator
   // =========================================================================
 
@@ -854,6 +1230,10 @@
       this.rail         = null;
       this.panel        = null;
       this.activeAnchor = null;
+      this.activeRangeKey = null;
+      this.pendingRange = null;
+      this.selectionPopover = null;
+      this._highlights  = [];
       this._escHandler  = null;
       this._lazyObserver = null;
     }
@@ -866,6 +1246,11 @@
       this.root.classList.add("erl-" + this.mode);
       this.root.innerHTML = "";
       this.root.appendChild(el("div", { class: "erl-loading", text: "Loading conversation…" }));
+
+      // OAuth callback drop-off: the server appended #errolan_token=… to the
+      // post-login URL. Pluck it into localStorage and clean the fragment so
+      // the token doesn't sit in the address bar.
+      this._consumeOAuthFragment();
 
       if (this.mode === "marginalia") {
         this.articleEl = resolveArticle(this.opts.article, this.root);
@@ -892,6 +1277,10 @@
         await this.refresh();
         if (this.live) this.startLive();
         if (this.rail) this.rail.attach();
+        if (this.mode === "marginalia" && this.articleEl) {
+          this.selectionPopover = new SelectionPopover(this);
+          this.selectionPopover.attach();
+        }
       } catch (e) {
         this.root.innerHTML = "";
         this.root.appendChild(el("div", { class: "erl-error", text: "Failed to load: " + e.message }));
@@ -916,12 +1305,93 @@
       });
     }
 
+    // _consumeOAuthFragment looks for "#errolan_token=…" in location.hash,
+    // stores the token, and strips it from the URL without a page reload.
+    // Idempotent — running on a fragment without the marker is a no-op.
+    _consumeOAuthFragment() {
+      const h = location.hash || "";
+      const idx = h.indexOf("errolan_token=");
+      if (idx < 0) return;
+      const tail = h.slice(idx + "errolan_token=".length);
+      const end  = tail.search(/[&]/);
+      const tok  = decodeURIComponent(end >= 0 ? tail.slice(0, end) : tail);
+      if (tok) this.client.setToken(tok);
+      // Strip the marker but preserve other hash content (e.g. an in-page
+      // anchor the publisher wanted to keep).
+      const before = h.slice(0, idx).replace(/[#&]$/, "");
+      const after  = end >= 0 ? tail.slice(end + 1) : "";
+      const rest   = [before.replace(/^#/, ""), after].filter(Boolean).join("&");
+      const newHash = rest ? "#" + rest : "";
+      history.replaceState(null, "", location.pathname + location.search + newHash);
+    }
+
     destroy() {
       if (this._lazyObserver) { this._lazyObserver.disconnect(); this._lazyObserver = null; }
       if (this.stream) { this.stream.stop(); this.stream = null; }
       if (this.rail)   { this.rail.detach(); this.rail = null; }
+      if (this.selectionPopover) { this.selectionPopover.detach(); this.selectionPopover = null; }
+      this.clearHighlights();
       this.closeParagraphPanel();
       delete this.root.__erlMounted;
+    }
+
+    // clearHighlights / paintHighlights manage the <mark class="erl-range">
+    // overlays the SDK injects into the host article so readers can see which
+    // passages have notes. Re-painted on every refresh.
+    clearHighlights() {
+      if (!this._highlights.length) return;
+      unhighlight(this._highlights);
+      this._highlights = [];
+    }
+    paintHighlights() {
+      if (this.mode !== "marginalia" || !this.articleEl) return;
+      this.clearHighlights();
+      // Build descriptors keyed by anchor + quote — we only paint once per
+      // unique passage, even if multiple comments share it.
+      const seen = new Set();
+      const descs = [];
+      (this.state.comments || []).forEach(c => {
+        if (!c.anchor || !c.range_quote) return;
+        const k = c.anchor + "::" + c.range_quote;
+        if (seen.has(k)) return;
+        seen.add(k);
+        descs.push({
+          anchor: c.anchor,
+          quote:  c.range_quote,
+          prefix: c.range_prefix || "",
+          suffix: c.range_suffix || "",
+          start:  c.range_start  || 0,
+          end:    c.range_end    || 0,
+          id:     c.id,
+        });
+      });
+      this._highlights = highlightDescriptors(this.articleEl, descs);
+      // Wire each <mark> as a clickable shortcut that opens the panel focused
+      // on that specific passage's group.
+      this._highlights.forEach(mark => {
+        mark.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const anchorID = mark.getAttribute("data-anchor");
+          const anchorEl = this.articleEl.querySelector(
+            '[data-errolan-anchor="' + cssEscape(anchorID) + '"]');
+          this.openParagraphPanel(anchorID, anchorEl, "q:" + (mark.textContent || ""));
+        });
+      });
+    }
+
+    // openSelectionNote is called by SelectionPopover when the reader clicks
+    // "Note this passage". We stash the range and open the panel in compose mode.
+    openSelectionNote(range) {
+      this.pendingRange = {
+        anchor: range.anchor,
+        quote:  range.quote,
+        prefix: range.prefix,
+        suffix: range.suffix,
+        start:  range.start,
+        end:    range.end,
+      };
+      this.openParagraphPanel(range.anchor, range.anchorEl, null);
     }
 
     async refresh(opts) {
@@ -983,6 +1453,8 @@
         this.root.appendChild(renderComposer(this, null, ""));
       }
 
+      this.renderMentions();
+
       const list = el("ul", { class: "erl-list erl-river" });
       for (const c of this.state.comments || []) list.appendChild(renderComment(this, c));
       this.root.appendChild(list);
@@ -1009,6 +1481,8 @@
         ]),
       ]));
 
+      this.renderMentions();
+
       const orphans = (this.state.comments || []).filter(c => !c.anchor);
       if (orphans.length) {
         this.root.appendChild(el("div", { class: "erl-divider" }, [
@@ -1022,10 +1496,16 @@
       }
 
       this.rail.build();
+      this.paintHighlights();
     }
 
-    openParagraphPanel(anchorID, paragraphEl) {
-      this.activeAnchor = anchorID;
+    // openParagraphPanel renders the side panel for a paragraph anchor. The
+    // optional `focusRangeKey` (a stable string identifying a specific text
+    // selection inside the anchor) makes only matching comments visible — used
+    // when the user clicked a highlighted passage rather than the stamp.
+    openParagraphPanel(anchorID, paragraphEl, focusRangeKey) {
+      this.activeAnchor   = anchorID;
+      this.activeRangeKey = focusRangeKey || null;
       if (paragraphEl) {
         this.articleEl.querySelectorAll("[data-errolan-anchor]")
           .forEach(p => p.classList.remove("erl-anchor-active"));
@@ -1048,17 +1528,34 @@
           text: txt.slice(0, 240) + (txt.length > 240 ? "…" : "") }));
       }
 
-      const list = el("ul", { class: "erl-list erl-panel-thread" });
-      const comments = (this.state.comments || []).filter(c => c.anchor === anchorID);
-      if (comments.length === 0) {
-        list.appendChild(el("li", { class: "erl-muted", text: "Be the first to write here." }));
+      const all = (this.state.comments || []).filter(c => c.anchor === anchorID);
+      const groups = groupByRange(all, focusRangeKey);
+
+      if (groups.length === 0) {
+        const empty = el("ul", { class: "erl-list erl-panel-thread" });
+        empty.appendChild(el("li", { class: "erl-muted", text: "Be the first to write here." }));
+        panel.appendChild(empty);
       } else {
-        comments.forEach(c => list.appendChild(renderComment(this, c)));
+        groups.forEach(group => {
+          if (group.quote) {
+            panel.appendChild(el("div", { class: "erl-passage-head" }, [
+              el("span", { class: "erl-passage-label", text: "On:" }),
+              el("blockquote", { class: "erl-quoted erl-quoted-small",
+                text: group.quote.length > 200 ? group.quote.slice(0, 200) + "…" : group.quote }),
+            ]));
+          }
+          const list = el("ul", { class: "erl-list erl-panel-thread" });
+          group.comments.forEach(c => list.appendChild(renderComment(this, c)));
+          panel.appendChild(list);
+        });
       }
-      panel.appendChild(list);
 
       if (this.state.thread && !this.state.thread.locked) {
-        panel.appendChild(renderComposer(this, null, anchorID));
+        // Carry over a pending text selection (set by SelectionPopover before
+        // the panel opened) so the composer pre-fills its quoted-passage hint.
+        const range = this.pendingRange && this.pendingRange.anchor === anchorID
+          ? this.pendingRange : null;
+        panel.appendChild(renderComposer(this, null, anchorID, range));
       } else if (this.state.thread && this.state.thread.locked) {
         panel.appendChild(el("div", { class: "erl-locked", text: "This thread is locked." }));
       }
@@ -1073,7 +1570,9 @@
     closeParagraphPanel() {
       removeNode(this.panel);
       this.panel = null;
-      this.activeAnchor = null;
+      this.activeAnchor   = null;
+      this.activeRangeKey = null;
+      this.pendingRange   = null;
       if (this._escHandler) {
         document.removeEventListener("keydown", this._escHandler);
         this._escHandler = null;
@@ -1082,7 +1581,10 @@
         this.articleEl.querySelectorAll("[data-errolan-anchor]")
           .forEach(p => p.classList.remove("erl-anchor-active"));
       }
-      if (this.mode === "marginalia" && this.rail) this.rail.build();
+      if (this.mode === "marginalia" && this.rail) {
+        this.rail.build();
+        this.paintHighlights();
+      }
     }
 
     // ----- shared -----
@@ -1117,11 +1619,54 @@
       } catch (e) { alert(e.message); }
     }
 
+    // renderMentions inserts an "Elsewhere on the web" block listing every
+    // verified Webmention / ActivityPub reply pointing at this thread. The
+    // block is intentionally distinct from native comments — different visual
+    // weight, no reply/react buttons — so readers know these came from
+    // another site rather than the comment composer below.
+    renderMentions() {
+      const mentions = (this.state && this.state.mentions) || [];
+      if (mentions.length === 0) return;
+      const block = el("section", { class: "erl-mentions" });
+      block.appendChild(el("div", { class: "erl-eyebrow",
+        text: "Elsewhere · " + mentions.length + " " + (mentions.length === 1 ? "reference" : "references") }));
+      const ul = el("ul", { class: "erl-list erl-mentions-list" });
+      mentions.forEach(m => ul.appendChild(this.renderMention(m)));
+      block.appendChild(ul);
+      this.root.appendChild(block);
+    }
+
+    renderMention(m) {
+      const author = el("a", {
+        class: "erl-mention-author",
+        href: m.author_url || m.source,
+        target: "_blank", rel: "nofollow noopener",
+        text: m.author_name || m.source,
+      });
+      const kind = el("span", {
+        class: "erl-mention-kind erl-mention-kind-" + (m.kind || "webmention"),
+        text: m.kind === "activitypub" ? "Fediverse" : "Web",
+      });
+      const snippet = m.snippet ? el("blockquote", { class: "erl-mention-snippet", text: m.snippet }) : null;
+      const source  = el("a", {
+        class: "erl-mention-source",
+        href: m.source, target: "_blank", rel: "nofollow noopener",
+        text: shortHost(m.source),
+      });
+      return el("li", { class: "erl-mention" }, [
+        el("div", { class: "erl-mention-head" }, [author, kind, source]),
+        snippet,
+      ]);
+    }
+
     renderAuthBar() {
       if (this.viewer) {
         return el("div", { class: "erl-auth" }, [
           el("span", { class: "erl-user", text: "@" + this.viewer.name }),
           this.viewer.is_admin ? el("span", { class: "erl-badge", text: "admin" }) : null,
+          el("button", { class: "erl-link", text: "my data",
+            onClick: () => openMyDataDialog(this),
+            title: "Export or delete the data Errolan holds about you" }),
           el("button", { class: "erl-link", text: "sign out",
             onClick: () => {
               this.client.setToken("");

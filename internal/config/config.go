@@ -26,6 +26,11 @@ type Config struct {
 	SDKDir         string
 	TrustForwarded bool
 	WebhookURL     string
+	PublicURL      string
+
+	// GitHub OAuth (optional). Set both to enable the GitHub login flow.
+	GitHubClientID     string
+	GitHubClientSecret string
 
 	// JWTSecretGenerated is true when no secret was provided and Load()
 	// generated an ephemeral one. main.go logs a warning so operators notice.
@@ -45,8 +50,11 @@ func Load() (*Config, error) {
 		AdminPassword:  os.Getenv("ERROLAN_ADMIN_PASSWORD"),
 		AdminCORS:      envOr("ERROLAN_ADMIN_CORS", "*"),
 		SDKDir:         envOr("ERROLAN_SDK_DIR", "sdk"),
-		TrustForwarded: strings.EqualFold(os.Getenv("ERROLAN_TRUST_FORWARDED"), "true"),
-		WebhookURL:     os.Getenv("ERROLAN_WEBHOOK_URL"),
+		TrustForwarded:     strings.EqualFold(os.Getenv("ERROLAN_TRUST_FORWARDED"), "true"),
+		WebhookURL:         os.Getenv("ERROLAN_WEBHOOK_URL"),
+		PublicURL:          os.Getenv("ERROLAN_PUBLIC_URL"),
+		GitHubClientID:     os.Getenv("ERROLAN_GITHUB_CLIENT_ID"),
+		GitHubClientSecret: os.Getenv("ERROLAN_GITHUB_CLIENT_SECRET"),
 	}
 	if cfg.JWTSecret == "" {
 		secret, err := generateSecret(32)

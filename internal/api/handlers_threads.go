@@ -39,6 +39,7 @@ type threadResp struct {
 	Sort     string            `json:"sort"`
 	Viewer   *threadViewerView `json:"viewer,omitempty"`
 	Emojis   []*models.Emoji   `json:"emojis"`
+	Mentions []*models.Mention `json:"mentions,omitempty"`
 }
 
 func parseSort(s string) store.SortOrder {
@@ -52,8 +53,11 @@ func parseSort(s string) store.SortOrder {
 	}
 }
 
-func threadETag(t *models.Thread) string {
-	raw := fmt.Sprintf("%d:%d:%d", t.ID, t.CommentCount, t.LastCommentAt)
+// threadETag mixes in the mention count so freshly-verified Webmentions /
+// ActivityPub replies invalidate the cache too — comment_count alone wouldn't
+// move when a mention arrives.
+func threadETag(t *models.Thread, mentionCount int) string {
+	raw := fmt.Sprintf("%d:%d:%d:%d", t.ID, t.CommentCount, t.LastCommentAt, mentionCount)
 	sum := sha1.Sum([]byte(raw))
 	return `W/"` + hex.EncodeToString(sum[:8]) + `"`
 }
@@ -89,9 +93,13 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 		limit = 50
 	}
 
+	// Pre-fetch the mention list now so it folds into the ETag. The list is
+	// also re-used in the response body below — one query, two consumers.
+	mentions, _ := s.Store.ListThreadMentions(thread.ID)
+
 	// Viewer scopes the ETag because my_vote varies by user.
 	viewer := userFrom(r)
-	tag := threadETag(thread)
+	tag := threadETag(thread, len(mentions))
 	if viewer != nil {
 		tag = `W/"u` + strconv.FormatInt(viewer.ID, 10) + ":" + strings.Trim(tag, `W/"`) + `"`
 	}
@@ -136,7 +144,8 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 			Name:        site.Name,
 			RequireAuth: site.RequireAuth,
 		},
-		Emojis: emojis,
+		Emojis:   emojis,
+		Mentions: mentions,
 	}
 	if viewer != nil {
 		resp.Viewer = &threadViewerView{
@@ -191,6 +200,55 @@ type createCommentReq struct {
 	AuthorName string `json:"author_name"` // anonymous only
 	Honeypot   string `json:"website"`     // must be empty
 	Anchor     string `json:"anchor"`      // optional paragraph id (marginalia)
+
+	// Text-range selectors (W3C Annotation style) — optional. When present they
+	// pin the comment to a specific passage inside the anchor element.
+	RangeQuote  string `json:"range_quote"`
+	RangePrefix string `json:"range_prefix"`
+	RangeSuffix string `json:"range_suffix"`
+	RangeStart  int    `json:"range_start"`
+	RangeEnd    int    `json:"range_end"`
+}
+
+// Bounds for selector fields. The quote is what we actually display and re-anchor
+// against; prefix/suffix are short context lifelines for fuzzy lookup.
+const (
+	maxRangeQuote   = 1000
+	maxRangeContext = 64
+)
+
+// validateTextRange normalises and bounds a user-supplied text selector. It
+// returns the cleaned-up range and an error message; a zero range with no
+// error means "no selector supplied" which is a valid legacy comment.
+func validateTextRange(req createCommentReq) (store.TextRange, string) {
+	q := strings.TrimSpace(req.RangeQuote)
+	if q == "" && req.RangeStart == 0 && req.RangeEnd == 0 {
+		return store.TextRange{}, ""
+	}
+	if q == "" {
+		return store.TextRange{}, "range_quote required when range is specified"
+	}
+	if len(q) > maxRangeQuote {
+		return store.TextRange{}, "range_quote too long"
+	}
+	if req.RangeStart < 0 || req.RangeEnd < 0 || req.RangeEnd < req.RangeStart {
+		return store.TextRange{}, "invalid range offsets"
+	}
+	prefix := req.RangePrefix
+	if len(prefix) > maxRangeContext {
+		prefix = prefix[len(prefix)-maxRangeContext:]
+	}
+	suffix := req.RangeSuffix
+	if len(suffix) > maxRangeContext {
+		suffix = suffix[:maxRangeContext]
+	}
+	return store.TextRange{
+		Quote:  q,
+		Prefix: prefix,
+		Suffix: suffix,
+		Start:  req.RangeStart,
+		End:    req.RangeEnd,
+	}, ""
 }
 
 // validAnchor caps the size and shape of paragraph anchors. The SDK reads
@@ -280,6 +338,18 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rng, rngErr := validateTextRange(req)
+	if rngErr != "" {
+		writeError(w, http.StatusBadRequest, rngErr)
+		return
+	}
+	// A text range without an anchor is meaningless — we need to know which
+	// element the offsets/quote refer to.
+	if rng.Quote != "" && anchor == "" {
+		writeError(w, http.StatusBadRequest, "anchor required when range_quote is set")
+		return
+	}
+
 	// Bound reply depth to prevent pathological nesting.
 	if req.ParentID != nil {
 		parent, err := s.Store.CommentByID(*req.ParentID, nil)
@@ -293,9 +363,16 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		if parent.ParentID != nil {
 			req.ParentID = parent.ParentID
 		}
-		// Replies inherit the parent's paragraph anchor — keeps the whole
-		// conversation pinned next to the same paragraph in marginalia mode.
+		// Replies inherit the parent's paragraph anchor and text range — the
+		// whole sub-thread stays pinned to the same passage.
 		anchor = parent.Anchor
+		rng = store.TextRange{
+			Quote:  parent.RangeQuote,
+			Prefix: parent.RangePrefix,
+			Suffix: parent.RangeSuffix,
+			Start:  parent.RangeStart,
+			End:    parent.RangeEnd,
+		}
 	}
 
 	// Run the moderation engine. Admins skip the queue: an admin posting is
@@ -316,7 +393,7 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		status = models.CommentStatusPending
 	}
 
-	c, err := s.Store.CreateComment(thread.ID, req.ParentID, userID, authorName, body, email, anchor, status, decision.Reason)
+	c, err := s.Store.CreateComment(thread.ID, req.ParentID, userID, authorName, body, email, anchor, status, decision.Reason, rng)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
