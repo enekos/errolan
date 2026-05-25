@@ -67,6 +67,185 @@
   const INLINE_BP = 900;  // default width (px) below which marginalia → inline
 
   // =========================================================================
+  // i18n — built-in language packs.
+  //
+  // Add a language by cloning STRINGS.en and translating the values. Pick a
+  // pack per mount via `data-errolan-lang="<code>"` or `opts.lang`. Missing
+  // keys silently fall back to English so a partial translation still works.
+  // =========================================================================
+
+  const STRINGS = {
+    en: {
+      loading: "Loading conversation…",
+      needArticle: "Marginalia mode needs an article element. Set data-errolan-article=\"<selector>\" or place the widget inside <article>.",
+      noAnchors: "No anchored paragraphs found (selector: {selector}). General notes only.",
+      failedToLoad: "Failed to load: {error}",
+      cadenceTitle: "The conversation",
+      noteSingular: "note",
+      notePlural: "notes",
+      locked: "This thread is locked.",
+      loadMore: "Load more",
+      footerPoweredBy: 'Powered by <a href="#">Errolan</a>',
+      marginaliaSummary: "Marginalia · {count} {noun}",
+      marginaliaSummaryHelp: "Hover the right margin to see what readers wrote next to each paragraph.",
+      generalNotes: "General notes",
+      panelTitle: "Marginalia · paragraph {anchor}",
+      panelEmpty: "Be the first to write here.",
+      panelOnPassage: "On:",
+      panelCloseTitle: "Close (Esc)",
+      mentionsTitle: "Elsewhere · {count} {noun}",
+      mentionsSingular: "reference",
+      mentionsPlural: "references",
+      mentionsKindFediverse: "Fediverse",
+      mentionsKindWeb: "Web",
+      adminBadge: "admin",
+      myData: "my data",
+      myDataTitle: "Export or delete the data Errolan holds about you",
+      signOut: "sign out",
+      signInLink: "sign in",
+      registerLink: "register",
+      authEmailPlaceholder: "email",
+      authNamePlaceholder: "display name",
+      authPasswordPlaceholder: "password (≥8 chars)",
+      authSignIn: "Sign in",
+      authCreate: "Create",
+      authCancel: "cancel",
+      authNeedAccount: "need an account?",
+      authHaveAccount: "have an account?",
+      authSignInTitle: "Sign in",
+      authCreateTitle: "Create an account",
+      authContinueWith: "Continue with {provider}",
+      authOr: "or",
+      myDataDialogTitle: "Your data",
+      myDataDialogDescription: "Errolan stores your profile, every comment you wrote, and every reaction you placed. You can download all of it, or delete your account. Deletions are permanent and anonymise your comments to keep replies threaded.",
+      myDataDownload: "Download my data (JSON)",
+      myDataDelete: "Delete my account permanently",
+      myDataDeleteConfirm: "This will anonymise your account and replace every comment body with [deleted]. Proceed?",
+      myDataClose: "close",
+      composerPleaseSignIn: "Please sign in to comment.",
+      composerNoteOnSelection: "Note on the selection",
+      composerNoteOnParagraph: "Add a note to paragraph {anchor}",
+      composerNamePlaceholder: "Your name",
+      composerReplyPlaceholder: "Write a reply…",
+      composerMarginPlaceholder: "Write in the margin…",
+      composerBodyPlaceholder: "Write a thoughtful note. Use :code: for emoji.",
+      composerReply: "Reply",
+      composerPostNote: "Post note",
+      composerPost: "Post",
+      composerTooLong: "Comment is too long.",
+      commentPinned: "★ pinned",
+      commentEdited: "edited",
+      commentAddReaction: "+ react",
+      commentReply: "reply",
+      commentEdit: "edit",
+      commentDelete: "delete",
+      commentPin: "pin",
+      commentUnpin: "unpin",
+      commentFlag: "flag",
+      commonSave: "Save",
+      commonCancel: "cancel",
+      commentConfirmDelete: "Delete this comment?",
+      commentFlagPrompt: "Flag this comment — reason (optional):",
+      commentFlagThanks: "Thanks — a moderator will review it.",
+      stampAdd: "+ Add a note",
+      stampByAuthor: "— @{author}",
+      selectionNoteThisPassage: "+ Note this passage",
+      sortBest: "Best",
+      sortNewest: "Newest",
+      sortOldest: "Oldest",
+    },
+    eu: {
+      loading: "Solasaldia kargatzen…",
+      needArticle: "Marjinalia moduak <article> elementu bat behar du. Ezarri data-errolan-article=\"<selector>\" edo jarri widgeta <article>-en barruan.",
+      noAnchors: "Ez da ainguratutako paragraforik aurkitu (selektorea: {selector}). Ohar orokorrak baino ez.",
+      failedToLoad: "Ezin izan da kargatu: {error}",
+      cadenceTitle: "Solasaldia",
+      noteSingular: "ohar",
+      notePlural: "ohar",
+      locked: "Hari hau itxita dago.",
+      loadMore: "Gehiago kargatu",
+      footerPoweredBy: 'Errolan-en bidez sortua',
+      marginaliaSummary: "Marjinaliak · {count} {noun}",
+      marginaliaSummaryHelp: "Igaro sagua eskuineko marjinatik irakurleek paragrafo bakoitzaren ondoan idatzitakoa ikusteko.",
+      generalNotes: "Ohar orokorrak",
+      panelTitle: "Marjinalia · {anchor} paragrafoa",
+      panelEmpty: "Izan zaitez lehena hemen idazten.",
+      panelOnPassage: "Honi buruz:",
+      panelCloseTitle: "Itxi (Esc)",
+      mentionsTitle: "Beste tokietan · {count} {noun}",
+      mentionsSingular: "aipamen",
+      mentionsPlural: "aipamen",
+      mentionsKindFediverse: "Fedibertsoa",
+      mentionsKindWeb: "Web",
+      adminBadge: "admin",
+      myData: "nire datuak",
+      myDataTitle: "Errolanek zuri buruz dituen datuak esportatu edo ezabatu",
+      signOut: "saioa amaitu",
+      signInLink: "saioa hasi",
+      registerLink: "izena eman",
+      authEmailPlaceholder: "e-posta",
+      authNamePlaceholder: "izen publikoa",
+      authPasswordPlaceholder: "pasahitza (≥8 karaktere)",
+      authSignIn: "Saioa hasi",
+      authCreate: "Sortu",
+      authCancel: "utzi",
+      authNeedAccount: "konturik gabe?",
+      authHaveAccount: "kontu bat baduzu?",
+      authSignInTitle: "Saioa hasi",
+      authCreateTitle: "Sortu kontu bat",
+      authContinueWith: "Jarraitu {provider}-rekin",
+      authOr: "edo",
+      myDataDialogTitle: "Zure datuak",
+      myDataDialogDescription: "Errolanek zure profila, idatzi dituzun iruzkin guztiak eta jarri dituzun erreakzio guztiak gordetzen ditu. Dena deskargatu dezakezu, edo zure kontua ezabatu. Ezabaketak betirakoak dira eta zure iruzkinak anonimoak bihurtzen dituzte erantzunak hari berean mantentzeko.",
+      myDataDownload: "Nire datuak deskargatu (JSON)",
+      myDataDelete: "Nire kontua betiko ezabatu",
+      myDataDeleteConfirm: "Honek zure kontua anonimo bihurtuko du eta iruzkin guztien edukia [ezabatua] testuarekin ordeztuko du. Aurrera jarraitu?",
+      myDataClose: "itxi",
+      composerPleaseSignIn: "Iruzkindu ahal izateko, saioa hasi behar duzu.",
+      composerNoteOnSelection: "Hautapenari buruzko oharra",
+      composerNoteOnParagraph: "Gehitu ohar bat {anchor} paragrafoari",
+      composerNamePlaceholder: "Zure izena",
+      composerReplyPlaceholder: "Idatzi erantzun bat…",
+      composerMarginPlaceholder: "Idatzi marjinan…",
+      composerBodyPlaceholder: "Idatzi ohar gogoetatsu bat. Erabili :code: emoji-rentzat.",
+      composerReply: "Erantzun",
+      composerPostNote: "Argitaratu oharra",
+      composerPost: "Argitaratu",
+      composerTooLong: "Iruzkina luzeegia da.",
+      commentPinned: "★ finkatuta",
+      commentEdited: "editatua",
+      commentAddReaction: "+ erreakzionatu",
+      commentReply: "erantzun",
+      commentEdit: "editatu",
+      commentDelete: "ezabatu",
+      commentPin: "finkatu",
+      commentUnpin: "kendu finka",
+      commentFlag: "salatu",
+      commonSave: "Gorde",
+      commonCancel: "utzi",
+      commentConfirmDelete: "Iruzkin hau ezabatu nahi duzu?",
+      commentFlagPrompt: "Iruzkin hau salatu — arrazoia (aukerakoa):",
+      commentFlagThanks: "Eskerrik asko — moderatzaile batek berrikusiko du.",
+      stampAdd: "+ Gehitu oharra",
+      stampByAuthor: "— @{author}",
+      selectionNoteThisPassage: "+ Pasarte hau oharreztatu",
+      sortBest: "Onenak",
+      sortNewest: "Berrienak",
+      sortOldest: "Zaharrenak",
+    },
+  };
+
+  function makeT(lang) {
+    const pack    = STRINGS[lang] || STRINGS.en;
+    const fallback = STRINGS.en;
+    return function t(key, vars) {
+      let s = pack[key] != null ? pack[key] : (fallback[key] != null ? fallback[key] : key);
+      if (vars) for (const k in vars) s = s.split("{" + k + "}").join(vars[k]);
+      return s;
+    };
+  }
+
+  // =========================================================================
   // DOM helpers
   // =========================================================================
 
@@ -544,21 +723,22 @@
   // =========================================================================
 
   function openAuthDialog(widget, mode) {
+    const t = widget.t;
     const overlay = el("div", { class: "erl-overlay" });
     const dialog  = el("div", { class: "erl-dialog" });
     const close   = () => removeNode(overlay);
 
-    const email  = el("input",  { type: "email", placeholder: "email", required: true });
+    const email  = el("input",  { type: "email", placeholder: t("authEmailPlaceholder"), required: true });
     const name   = mode === "register"
-      ? el("input", { type: "text", placeholder: "display name", required: true })
+      ? el("input", { type: "text", placeholder: t("authNamePlaceholder"), required: true })
       : null;
-    const pw     = el("input",  { type: "password", placeholder: "password (≥8 chars)", required: true });
+    const pw     = el("input",  { type: "password", placeholder: t("authPasswordPlaceholder"), required: true });
     const errBox = el("div",    { class: "erl-error" });
-    const submit = el("button", { class: "erl-primary", text: mode === "login" ? "Sign in" : "Create" });
-    const cancel = el("button", { class: "erl-link", text: "cancel", onClick: close });
+    const submit = el("button", { class: "erl-primary", text: mode === "login" ? t("authSignIn") : t("authCreate") });
+    const cancel = el("button", { class: "erl-link", text: t("authCancel"), onClick: close });
     const switcher = el("button", {
       class: "erl-link",
-      text: mode === "login" ? "need an account?" : "have an account?",
+      text: mode === "login" ? t("authNeedAccount") : t("authHaveAccount"),
       onClick: () => { close(); openAuthDialog(widget, mode === "login" ? "register" : "login"); },
     });
 
@@ -577,7 +757,7 @@
 
     overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
 
-    dialog.appendChild(el("h4", { text: mode === "login" ? "Sign in" : "Create an account" }));
+    dialog.appendChild(el("h4", { text: mode === "login" ? t("authSignInTitle") : t("authCreateTitle") }));
 
     // OAuth options first — easier to click than typing credentials. We fetch
     // the list lazily; an unconfigured instance returns [] and we just don't
@@ -590,10 +770,10 @@
         oauthRow.appendChild(el("a", {
           class: "erl-oauth-btn erl-oauth-" + p.name,
           href: widget.client.oauthRedirectURL(p.name),
-          text: "Continue with " + p.label,
+          text: t("authContinueWith", { provider: p.label }),
         }));
       });
-      dialog.insertBefore(el("div", { class: "erl-oauth-sep", text: "or" }), oauthRow.nextSibling);
+      dialog.insertBefore(el("div", { class: "erl-oauth-sep", text: t("authOr") }), oauthRow.nextSibling);
     }).catch(() => { /* unconfigured — silent */ });
 
     dialog.appendChild(email);
@@ -614,18 +794,19 @@
   // =========================================================================
 
   function openMyDataDialog(widget) {
+    const t = widget.t;
     const overlay = el("div", { class: "erl-overlay" });
     const dialog  = el("div", { class: "erl-dialog" });
     const close   = () => removeNode(overlay);
 
-    dialog.appendChild(el("h4", { text: "Your data" }));
+    dialog.appendChild(el("h4", { text: t("myDataDialogTitle") }));
     dialog.appendChild(el("p", { class: "erl-muted",
-      text: "Errolan stores your profile, every comment you wrote, and every reaction you placed. You can download all of it, or delete your account. Deletions are permanent and anonymise your comments to keep replies threaded." }));
+      text: t("myDataDialogDescription") }));
 
     const errBox = el("div", { class: "erl-error" });
 
     const exportBtn = el("button", {
-      class: "erl-primary", text: "Download my data (JSON)",
+      class: "erl-primary", text: t("myDataDownload"),
       onClick: async () => {
         errBox.textContent = "";
         try {
@@ -639,9 +820,9 @@
       },
     });
     const deleteBtn = el("button", {
-      class: "erl-danger", text: "Delete my account permanently",
+      class: "erl-danger", text: t("myDataDelete"),
       onClick: async () => {
-        if (!confirm("This will anonymise your account and replace every comment body with [deleted]. Proceed?")) return;
+        if (!confirm(t("myDataDeleteConfirm"))) return;
         errBox.textContent = "";
         try {
           await widget.client.deleteMyAccount();
@@ -656,7 +837,7 @@
     dialog.appendChild(el("div", { class: "erl-actions" }, [exportBtn]));
     dialog.appendChild(el("div", { class: "erl-actions" }, [deleteBtn]));
     dialog.appendChild(errBox);
-    dialog.appendChild(el("button", { class: "erl-link", text: "close", onClick: close }));
+    dialog.appendChild(el("button", { class: "erl-link", text: t("myDataClose"), onClick: close }));
 
     overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
     overlay.appendChild(dialog);
@@ -703,25 +884,26 @@
   // =========================================================================
 
   function renderComposer(widget, parentID, anchor, range) {
+    const t = widget.t;
     const wrap = el("form", { class: "erl-composer" });
     const requireAuth = widget.state.site && widget.state.site.require_auth;
     if (requireAuth && !widget.viewer) {
-      wrap.appendChild(el("div", { class: "erl-muted", text: "Please sign in to comment." }));
+      wrap.appendChild(el("div", { class: "erl-muted", text: t("composerPleaseSignIn") }));
       return wrap;
     }
 
     if (range && range.quote) {
       const shortQ = range.quote.length > 140 ? range.quote.slice(0, 140) + "…" : range.quote;
-      wrap.appendChild(el("div", { class: "erl-eyebrow", text: "Note on the selection" }));
+      wrap.appendChild(el("div", { class: "erl-eyebrow", text: t("composerNoteOnSelection") }));
       wrap.appendChild(el("blockquote", { class: "erl-quoted erl-quoted-small", text: shortQ }));
     } else if (anchor) {
-      wrap.appendChild(el("div", { class: "erl-eyebrow", text: "Add a note to paragraph " + anchor }));
+      wrap.appendChild(el("div", { class: "erl-eyebrow", text: t("composerNoteOnParagraph", { anchor: anchor }) }));
     }
 
     let nameInput = null;
     if (!widget.viewer) {
       nameInput = el("input", {
-        type: "text", class: "erl-name", placeholder: "Your name",
+        type: "text", class: "erl-name", placeholder: t("composerNamePlaceholder"),
         value: localStorage.getItem(NAME_KEY) || "",
       });
       wrap.appendChild(nameInput);
@@ -729,8 +911,8 @@
 
     const textarea = el("textarea", {
       class: "erl-body",
-      placeholder: parentID ? "Write a reply…"
-        : (anchor ? "Write in the margin…" : "Write a thoughtful note. Use :code: for emoji."),
+      placeholder: parentID ? t("composerReplyPlaceholder")
+        : (anchor ? t("composerMarginPlaceholder") : t("composerBodyPlaceholder")),
       rows: parentID ? 2 : 3,
     });
     wrap.appendChild(textarea);
@@ -761,7 +943,7 @@
     const errBox = el("div", { class: "erl-error" });
     const submit = el("button", {
       type: "submit", class: "erl-primary",
-      text: parentID ? "Reply" : (anchor ? "Post note" : "Post"),
+      text: parentID ? t("composerReply") : (anchor ? t("composerPostNote") : t("composerPost")),
     });
     wrap.appendChild(errBox);
     wrap.appendChild(el("div", { class: "erl-actions" }, [submit]));
@@ -773,7 +955,7 @@
       if (!body) return;
       if (honeypot.value) return;
       if (body.length > BODY_MAX) {
-        errBox.textContent = "Comment is too long.";
+        errBox.textContent = t("composerTooLong");
         return;
       }
       const an = nameInput ? nameInput.value.trim() : "";
@@ -801,7 +983,8 @@
   // CommentView: render a single comment into a <li>
   // =========================================================================
 
-  function renderCommentHead(c) {
+  function renderCommentHead(widget, c) {
+    const t = widget.t;
     const avatar = el("div", {
       class: "erl-avatar",
       style: c.avatar_url ? ("background-image:url(" + c.avatar_url + ")") : "",
@@ -809,9 +992,9 @@
     });
     const meta = el("div", { class: "erl-c-meta" }, [
       el("span", { class: "erl-c-author", text: "@" + c.author_name }),
-      c.pinned ? el("span", { class: "erl-pin-badge", text: "★ pinned" }) : null,
+      c.pinned ? el("span", { class: "erl-pin-badge", text: t("commentPinned") }) : null,
       el("span", { class: "erl-c-time",
-        text: relTime(c.created_at) + (c.edit_count ? " · edited" : "") }),
+        text: relTime(c.created_at) + (c.edit_count ? " · " + t("commentEdited") : "") }),
     ]);
     return el("div", { class: "erl-c-head" }, [avatar, meta]);
   }
@@ -833,37 +1016,39 @@
     });
 
     strip.appendChild(el("button", {
-      class: "erl-rx-add", text: "+ react",
+      class: "erl-rx-add", text: widget.t("commentAddReaction"),
       onClick: (ev) => openReactionPicker(widget, c, ev.currentTarget),
     }));
     return strip;
   }
 
   function renderCommentActions(widget, c) {
+    const t = widget.t;
     const locked = widget.state.thread.locked;
     return el("div", { class: "erl-c-actions" }, [
       !locked ? el("button", {
-        class: "erl-link", text: "reply",
+        class: "erl-link", text: t("commentReply"),
         onClick: () => { widget.replyTo = c.id; widget.render(); },
       }) : null,
       widget.canEdit(c) ? el("button", {
-        class: "erl-link", text: "edit",
+        class: "erl-link", text: t("commentEdit"),
         onClick: () => { widget.editing = c.id; widget.render(); },
       }) : null,
       widget.canEdit(c) && c.status !== "deleted" ? el("button", {
-        class: "erl-link", text: "delete",
+        class: "erl-link", text: t("commentDelete"),
         onClick: () => widget.handleDelete(c),
       }) : null,
       widget.viewer && widget.viewer.is_admin ? el("button", {
-        class: "erl-link", text: c.pinned ? "unpin" : "pin",
+        class: "erl-link", text: c.pinned ? t("commentUnpin") : t("commentPin"),
         onClick: () => widget.handlePin(c),
       }) : null,
-      el("button", { class: "erl-link", text: "flag",
+      el("button", { class: "erl-link", text: t("commentFlag"),
         onClick: () => widget.handleFlag(c) }),
     ]);
   }
 
   function renderEditor(widget, c) {
+    const t = widget.t;
     const wrap = el("form", { class: "erl-composer" });
     const ta   = el("textarea", { class: "erl-body", rows: 3 });
     ta.value = c.body;
@@ -872,8 +1057,8 @@
     wrap.appendChild(ta);
     wrap.appendChild(errBox);
     wrap.appendChild(el("div", { class: "erl-actions" }, [
-      el("button", { type: "submit", class: "erl-primary", text: "Save" }),
-      el("button", { type: "button", class: "erl-link",    text: "cancel",
+      el("button", { type: "submit", class: "erl-primary", text: t("commonSave") }),
+      el("button", { type: "button", class: "erl-link",    text: t("commonCancel"),
         onClick: () => { widget.editing = null; widget.render(); } }),
     ]));
     wrap.addEventListener("submit", async (ev) => {
@@ -891,7 +1076,7 @@
 
   function renderComment(widget, c) {
     const li = el("li", { class: "erl-c" + (c.pinned ? " erl-c-pinned" : ""), "data-id": c.id });
-    li.appendChild(renderCommentHead(c));
+    li.appendChild(renderCommentHead(widget, c));
 
     const bodyNode = widget.editing === c.id
       ? renderEditor(widget, c)
@@ -1117,7 +1302,7 @@
       });
 
       if (total === 0) {
-        stamp.appendChild(el("span", { class: "erl-stamp-add", text: "+ Add a note" }));
+        stamp.appendChild(el("span", { class: "erl-stamp-add", text: widget.t("stampAdd") }));
         return stamp;
       }
 
@@ -1129,12 +1314,12 @@
       });
       stamp.appendChild(rxRow);
       stamp.appendChild(el("span", { class: "erl-stamp-meta",
-        text: total + " " + (total === 1 ? "note" : "notes") }));
+        text: total + " " + (total === 1 ? widget.t("noteSingular") : widget.t("notePlural")) }));
       const preview = comments[0].body.slice(0, 90);
       stamp.appendChild(el("span", { class: "erl-stamp-preview",
         text: '"' + preview + (comments[0].body.length > 90 ? "…" : "") + '"' }));
       stamp.appendChild(el("span", { class: "erl-stamp-author",
-        text: "— @" + comments[0].author_name }));
+        text: widget.t("stampByAuthor", { author: comments[0].author_name }) }));
       return stamp;
     }
   }
@@ -1150,20 +1335,27 @@
       this.widget   = widget;
       this.node     = null;
       this._onUp    = () => this.maybeShow();
+      // Capture-phase mousedown handles two cases: 1) click inside the popover
+      // -> let the click through so onClick fires; 2) click anywhere else ->
+      // hide. We can't use a regular click listener because the browser
+      // collapses the selection on mousedown, which would race the popover's
+      // own click handler.
       this._onDown  = (ev) => { if (this.node && !this.node.contains(ev.target)) this.hide(); };
-      this._onScroll = () => this.hide();
+      // Re-anchor on scroll instead of hiding — the popover is absolutely
+      // positioned in document coords so it already scrolls with the page;
+      // hiding on every wheel tick made the popover impossible to click
+      // after the slightest accidental scroll. We still hide if the user
+      // selects new text (handled in maybeShow) or clicks outside.
     }
     attach() {
       document.addEventListener("mouseup",   this._onUp);
       document.addEventListener("keyup",     this._onUp);
       document.addEventListener("mousedown", this._onDown, true);
-      window.addEventListener("scroll",      this._onScroll, true);
     }
     detach() {
       document.removeEventListener("mouseup",   this._onUp);
       document.removeEventListener("keyup",     this._onUp);
       document.removeEventListener("mousedown", this._onDown, true);
-      window.removeEventListener("scroll",      this._onScroll, true);
       this.hide();
     }
     maybeShow() {
@@ -1179,19 +1371,40 @@
       this.hide();
       const btn = el("button", {
         type: "button", class: "erl-select-popover",
-        text: "+ Note this passage",
-        onClick: (ev) => {
+        text: this.widget.t("selectionNoteThisPassage"),
+        // mousedown rather than click so we beat the browser's
+        // mousedown-collapses-selection behavior. We still need to stop
+        // propagation so _onDown doesn't pre-emptively hide us.
+        onMouseDown: (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
           this.widget.openSelectionNote(range);
           this.hide();
         },
       });
-      // Position above the selection rect.
       btn.style.position = "absolute";
-      btn.style.top  = (range.rect.top   + window.scrollY - 36) + "px";
-      btn.style.left = (range.rect.left  + window.scrollX) + "px";
+      btn.style.visibility = "hidden"; // hide while we measure for clamping
       document.body.appendChild(btn);
+
+      // Position above the selection by default; if there isn't room above
+      // (selection is near the top of the viewport), place it below. Then
+      // clamp horizontally so the popover never escapes the viewport.
+      const rect = range.rect;
+      const w = btn.offsetWidth  || 180;
+      const h = btn.offsetHeight || 28;
+      const gap = 8;
+      const fitsAbove = rect.top >= h + gap;
+      const docTop = fitsAbove
+        ? rect.top + window.scrollY - h - gap
+        : rect.bottom + window.scrollY + gap;
+      const minLeft = window.scrollX + 8;
+      const maxLeft = window.scrollX + window.innerWidth - w - 8;
+      const wantLeft = rect.left + window.scrollX;
+      const docLeft = Math.min(maxLeft, Math.max(minLeft, wantLeft));
+
+      btn.style.top  = docTop  + "px";
+      btn.style.left = docLeft + "px";
+      btn.style.visibility = "";
       this.node = btn;
     }
     hide() {
@@ -1212,6 +1425,8 @@
       this.mode   = opts.mode === "marginalia" ? "marginalia" : "cadence";
       this.sort   = opts.sort || "best";
       this.live   = opts.live !== false;
+      this.lang   = STRINGS[opts.lang] ? opts.lang : "en";
+      this.t      = makeT(this.lang);
 
       // Anchor selector: default to data-attribute, but accept any CSS
       // selector so hosts can use existing semantic ids (e.g. heading anchors).
@@ -1245,7 +1460,7 @@
       this.root.classList.add("erl");
       this.root.classList.add("erl-" + this.mode);
       this.root.innerHTML = "";
-      this.root.appendChild(el("div", { class: "erl-loading", text: "Loading conversation…" }));
+      this.root.appendChild(el("div", { class: "erl-loading", text: this.t("loading") }));
 
       // OAuth callback drop-off: the server appended #errolan_token=… to the
       // post-login URL. Pluck it into localStorage and clean the fragment so
@@ -1257,14 +1472,14 @@
         if (!this.articleEl) {
           this.root.innerHTML = "";
           this.root.appendChild(el("div", { class: "erl-error", text:
-            "Marginalia mode needs an article element. Set data-errolan-article=\"<selector>\" or place the widget inside <article>." }));
+            this.t("needArticle") }));
           return;
         }
         if (findAnchors(this.articleEl, this.anchorSelector).length === 0) {
           // Soft-warn: we keep the widget alive (general notes still work) but
           // surface the situation so hosts notice the article has no anchors.
           this.root.appendChild(el("div", { class: "erl-muted", text:
-            "No anchored paragraphs found (selector: " + this.anchorSelector + "). General notes only." }));
+            this.t("noAnchors", { selector: this.anchorSelector }) }));
         }
         this.rail = new MarginaliaRail(this);
       }
@@ -1283,7 +1498,7 @@
         }
       } catch (e) {
         this.root.innerHTML = "";
-        this.root.appendChild(el("div", { class: "erl-error", text: "Failed to load: " + e.message }));
+        this.root.appendChild(el("div", { class: "erl-error", text: this.t("failedToLoad", { error: e.message }) }));
       }
     }
 
@@ -1435,20 +1650,21 @@
     // ----- cadence -----
 
     renderCadence() {
+      const t = this.t;
       const total = (this.state.thread && this.state.thread.comment_count) || 0;
       this.root.appendChild(el("div", { class: "erl-divider" }, [
         el("span", { class: "erl-rule" }),
-        el("span", { class: "erl-divider-label", text: "The conversation" }),
+        el("span", { class: "erl-divider-label", text: t("cadenceTitle") }),
         el("span", { class: "erl-rule" }),
       ]));
       this.root.appendChild(el("div", { class: "erl-header" }, [
-        el("span", { class: "erl-count", text: total + " " + (total === 1 ? "note" : "notes") }),
+        el("span", { class: "erl-count", text: total + " " + (total === 1 ? t("noteSingular") : t("notePlural")) }),
         this.renderSortControl(),
         this.renderAuthBar(),
       ]));
 
       if (this.state.thread && this.state.thread.locked) {
-        this.root.appendChild(el("div", { class: "erl-locked", text: "This thread is locked." }));
+        this.root.appendChild(el("div", { class: "erl-locked", text: t("locked") }));
       } else {
         this.root.appendChild(renderComposer(this, null, ""));
       }
@@ -1461,22 +1677,23 @@
 
       if (this.state.has_more) {
         this.root.appendChild(el("div", { class: "erl-more" }, [
-          el("button", { class: "erl-link", text: "Load more", onClick: () => this.loadMore() }),
+          el("button", { class: "erl-link", text: t("loadMore"), onClick: () => this.loadMore() }),
         ]));
       }
-      this.root.appendChild(el("div", { class: "erl-footer", html: 'Powered by <a href="#">Errolan</a>' }));
+      this.root.appendChild(el("div", { class: "erl-footer", html: t("footerPoweredBy") }));
     }
 
     // ----- marginalia -----
 
     renderMarginalia() {
+      const t = this.t;
       const total = (this.state.thread && this.state.thread.comment_count) || 0;
       this.root.appendChild(el("div", { class: "erl-marginalia-summary" }, [
         el("div", { class: "erl-eyebrow",
-          text: "Marginalia · " + total + " " + (total === 1 ? "note" : "notes") }),
+          text: t("marginaliaSummary", { count: total, noun: total === 1 ? t("noteSingular") : t("notePlural") }) }),
         el("div", { class: "erl-summary-row" }, [
           el("span", { class: "erl-summary-text",
-            text: "Hover the right margin to see what readers wrote next to each paragraph." }),
+            text: t("marginaliaSummaryHelp") }),
           this.renderAuthBar(),
         ]),
       ]));
@@ -1487,7 +1704,7 @@
       if (orphans.length) {
         this.root.appendChild(el("div", { class: "erl-divider" }, [
           el("span", { class: "erl-rule" }),
-          el("span", { class: "erl-divider-label", text: "General notes" }),
+          el("span", { class: "erl-divider-label", text: t("generalNotes") }),
           el("span", { class: "erl-rule" }),
         ]));
         const list = el("ul", { class: "erl-list" });
@@ -1517,10 +1734,10 @@
         onClick: (ev) => { if (ev.target === overlay) this.closeParagraphPanel(); }});
       const panel = el("aside", { class: "erl-panel" });
       panel.appendChild(el("button", {
-        class: "erl-panel-close", text: "×", title: "Close (Esc)",
+        class: "erl-panel-close", text: "×", title: this.t("panelCloseTitle"),
         onClick: () => this.closeParagraphPanel(),
       }));
-      panel.appendChild(el("div", { class: "erl-eyebrow", text: "Marginalia · paragraph " + anchorID }));
+      panel.appendChild(el("div", { class: "erl-eyebrow", text: this.t("panelTitle", { anchor: anchorID }) }));
 
       if (paragraphEl) {
         const txt = paragraphEl.textContent || "";
@@ -1533,13 +1750,13 @@
 
       if (groups.length === 0) {
         const empty = el("ul", { class: "erl-list erl-panel-thread" });
-        empty.appendChild(el("li", { class: "erl-muted", text: "Be the first to write here." }));
+        empty.appendChild(el("li", { class: "erl-muted", text: this.t("panelEmpty") }));
         panel.appendChild(empty);
       } else {
         groups.forEach(group => {
           if (group.quote) {
             panel.appendChild(el("div", { class: "erl-passage-head" }, [
-              el("span", { class: "erl-passage-label", text: "On:" }),
+              el("span", { class: "erl-passage-label", text: this.t("panelOnPassage") }),
               el("blockquote", { class: "erl-quoted erl-quoted-small",
                 text: group.quote.length > 200 ? group.quote.slice(0, 200) + "…" : group.quote }),
             ]));
@@ -1557,7 +1774,7 @@
           ? this.pendingRange : null;
         panel.appendChild(renderComposer(this, null, anchorID, range));
       } else if (this.state.thread && this.state.thread.locked) {
-        panel.appendChild(el("div", { class: "erl-locked", text: "This thread is locked." }));
+        panel.appendChild(el("div", { class: "erl-locked", text: this.t("locked") }));
       }
 
       overlay.appendChild(panel);
@@ -1590,8 +1807,9 @@
     // ----- shared -----
 
     renderSortControl() {
+      const t = this.t;
       const sel = el("select", { class: "erl-sort" });
-      [["best","Best"],["newest","Newest"],["oldest","Oldest"]].forEach(([v, label]) => {
+      [["best", t("sortBest")], ["newest", t("sortNewest")], ["oldest", t("sortOldest")]].forEach(([v, label]) => {
         const opt = el("option", { value: v, text: label });
         if (v === this.sort) opt.selected = "selected";
         sel.appendChild(opt);
@@ -1629,7 +1847,10 @@
       if (mentions.length === 0) return;
       const block = el("section", { class: "erl-mentions" });
       block.appendChild(el("div", { class: "erl-eyebrow",
-        text: "Elsewhere · " + mentions.length + " " + (mentions.length === 1 ? "reference" : "references") }));
+        text: this.t("mentionsTitle", {
+          count: mentions.length,
+          noun: mentions.length === 1 ? this.t("mentionsSingular") : this.t("mentionsPlural"),
+        }) }));
       const ul = el("ul", { class: "erl-list erl-mentions-list" });
       mentions.forEach(m => ul.appendChild(this.renderMention(m)));
       block.appendChild(ul);
@@ -1645,7 +1866,7 @@
       });
       const kind = el("span", {
         class: "erl-mention-kind erl-mention-kind-" + (m.kind || "webmention"),
-        text: m.kind === "activitypub" ? "Fediverse" : "Web",
+        text: m.kind === "activitypub" ? this.t("mentionsKindFediverse") : this.t("mentionsKindWeb"),
       });
       const snippet = m.snippet ? el("blockquote", { class: "erl-mention-snippet", text: m.snippet }) : null;
       const source  = el("a", {
@@ -1660,14 +1881,15 @@
     }
 
     renderAuthBar() {
+      const t = this.t;
       if (this.viewer) {
         return el("div", { class: "erl-auth" }, [
           el("span", { class: "erl-user", text: "@" + this.viewer.name }),
-          this.viewer.is_admin ? el("span", { class: "erl-badge", text: "admin" }) : null,
-          el("button", { class: "erl-link", text: "my data",
+          this.viewer.is_admin ? el("span", { class: "erl-badge", text: t("adminBadge") }) : null,
+          el("button", { class: "erl-link", text: t("myData"),
             onClick: () => openMyDataDialog(this),
-            title: "Export or delete the data Errolan holds about you" }),
-          el("button", { class: "erl-link", text: "sign out",
+            title: t("myDataTitle") }),
+          el("button", { class: "erl-link", text: t("signOut"),
             onClick: () => {
               this.client.setToken("");
               this.etag = null;
@@ -1676,10 +1898,10 @@
         ]);
       }
       return el("div", { class: "erl-auth" }, [
-        el("button", { class: "erl-link", text: "sign in",
+        el("button", { class: "erl-link", text: t("signInLink"),
           onClick: () => openAuthDialog(this, "login") }),
         el("span", { class: "erl-divider-dot", text: "·" }),
-        el("button", { class: "erl-link", text: "register",
+        el("button", { class: "erl-link", text: t("registerLink"),
           onClick: () => openAuthDialog(this, "register") }),
       ]);
     }
@@ -1698,7 +1920,7 @@
       catch (e) { alert(e.message); }
     }
     async handleDelete(c) {
-      if (!confirm("Delete this comment?")) return;
+      if (!confirm(this.t("commentConfirmDelete"))) return;
       try { await this.client.deleteComment(c.id); this.etag = null; await this.refresh(); }
       catch (e) { alert(e.message); }
     }
@@ -1707,9 +1929,9 @@
       catch (e) { alert(e.message); }
     }
     async handleFlag(c) {
-      const reason = prompt("Flag this comment — reason (optional):");
+      const reason = prompt(this.t("commentFlagPrompt"));
       if (reason === null) return;
-      try { await this.client.flag(c.id, reason); alert("Thanks — a moderator will review it."); }
+      try { await this.client.flag(c.id, reason); alert(this.t("commentFlagThanks")); }
       catch (e) { alert(e.message); }
     }
   }
@@ -1741,6 +1963,7 @@
       url:               n.getAttribute("data-errolan-url")   || location.href,
       sort:              n.getAttribute("data-errolan-sort")  || "best",
       mode:              n.getAttribute("data-errolan-mode")  || "cadence",
+      lang:              n.getAttribute("data-errolan-lang")  || global.ERROLAN_LANG || "en",
       article:           n.getAttribute("data-errolan-article") || "",
       anchorSelector:    n.getAttribute("data-errolan-anchor-selector") || "",
       inlineBreakpoint:  isNaN(bp) ? undefined : bp,

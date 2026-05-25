@@ -1,12 +1,21 @@
 /* Errolan SDK — editorial theme.
  *
- * The widget is host-themable via CSS custom properties on `.erl`. Defaults
- * below match the design canvas (paper/ink palette, editorial vermilion).
+ * The widget is host-themable via CSS custom properties on `.erl` (and the
+ * body-level containers below: dialogs, panels, the marginalia rail and
+ * popovers are appended to <body>, so the tokens must be declared on them
+ * too — otherwise `var(--erl-paper)` resolves to nothing and the dialog
+ * background falls through to transparent).
  * Override on the host page like:
  *
- *   .erl { --erl-accent: #1C4F88; }
+ *   .erl, .erl-overlay, .erl-panel-overlay, .erl-rail,
+ *   .erl-rx-popover, .erl-select-popover { --erl-accent: #1C4F88; }
  */
-.erl {
+.erl,
+.erl-overlay,
+.erl-panel-overlay,
+.erl-rail,
+.erl-rx-popover,
+.erl-select-popover {
   --erl-paper:     #FAF7EF;
   --erl-paper-2:   #F3EFE3;
   --erl-ink:       #16140F;
@@ -21,7 +30,8 @@
   --erl-serif:   "Newsreader", "Source Serif Pro", Georgia, serif;
   --erl-display: "Instrument Serif", "Newsreader", Georgia, serif;
   --erl-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-
+}
+.erl {
   font-family: var(--erl-serif);
   color: var(--erl-ink);
   font-size: 16px;
@@ -438,7 +448,12 @@
 }
 /* Inline stamps appear directly under each anchored element on narrow viewports
    (or when forceInline is set). They flow with the document instead of being
-   absolutely positioned, so they need their own visual treatment. */
+   absolutely positioned, so they need their own visual treatment.
+
+   Empty stamps default to a ghosted state so they don't disrupt reading flow;
+   they brighten when the user hovers them or their preceding paragraph (via
+   `:has(:hover)` — see `.erl-anchor-host` rule). Stamps with comments stay
+   fully visible. */
 .erl-stamp-inline {
   display: flex;
   flex-direction: row;
@@ -449,11 +464,27 @@
   padding: 6px 10px;
   border-left: 2px solid var(--erl-rule);
   background: var(--erl-paper-2);
+  transition: opacity .15s, background .15s, border-color .15s;
 }
 .erl-stamp-inline.erl-stamp-active { border-left-color: var(--erl-accent); }
 .erl-stamp-inline .erl-stamp-meta { order: 1; }
 .erl-stamp-inline .erl-stamp-preview { flex: 1 1 220px; }
 .erl-stamp-inline .erl-stamp-author { margin-left: auto; }
+
+/* Empty inline stamps: faded by default, full strength on hover. */
+.erl-stamp-inline.erl-stamp-empty {
+  background: transparent;
+  border-left-color: var(--erl-rule-soft);
+  padding: 2px 10px;
+  margin: -4px 0 12px;
+  opacity: 0.35;
+}
+.erl-stamp-inline.erl-stamp-empty:hover,
+.erl-stamp-inline.erl-stamp-empty:focus-visible {
+  opacity: 1;
+  border-left-color: var(--erl-accent);
+  background: var(--erl-paper-2);
+}
 .erl-stamp:hover { background: var(--erl-paper-2); }
 .erl-stamp-active {
   background: var(--erl-paper-2);

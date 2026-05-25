@@ -156,7 +156,7 @@ func (s *Store) CommentByID(id int64, viewerID *int64) (*models.Comment, error) 
 		viewerIDArg = *viewerID
 	}
 	row := s.DB.QueryRow(
-		`SELECT `+commentCols+`, COALESCE(v.value, 0) FROM comments c LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ? WHERE c.id = ?`,
+		`SELECT `+commentColsPrefixed+`, COALESCE(v.value, 0) FROM comments c LEFT JOIN votes v ON v.comment_id = c.id AND v.user_id = ? WHERE c.id = ?`,
 		viewerIDArg, id,
 	)
 	c := &models.Comment{}
